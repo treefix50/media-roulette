@@ -2,36 +2,24 @@ from app.services.jellyfin import JellyfinService
 from app.services.emby import EmbyService
 
 
-def get_media_service(
-    server_type: str,
-    server_url: str
-):
+def get_media_service(server_type: str, server_url: str):
 
-    if server_type.lower() == "jellyfin":
+    server_type = server_type.lower()
 
-        return JellyfinService(
-            server_url
-        )
+    if server_type == "jellyfin":
+        return JellyfinService(server_url)
 
+    if server_type == "emby":
+        return EmbyService(server_url)
 
-    if server_type.lower() == "emby":
-
-        return EmbyService(
-            server_url
-        )
-
-
-    raise ValueError(
-        "Unbekannter Medienserver"
-    )
-
+    raise ValueError("Nicht unterstützter Mediaserver")
 
 
 async def authenticate(
-    server_type,
-    server_url,
-    username,
-    password
+    server_type: str,
+    server_url: str,
+    username: str,
+    password: str
 ):
 
     service = get_media_service(
@@ -39,19 +27,18 @@ async def authenticate(
         server_url
     )
 
-
     user = await service.login(
         username,
         password
     )
 
-
     if not user:
         return None
-
 
     return {
         "server_type": server_type,
         "server_url": server_url,
-        **user
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "token": user["token"]
     }
