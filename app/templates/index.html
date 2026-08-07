@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+  <h1>🎲 Media Roulette</h1>
+  <p>Deine lokale Film- und Serienbibliothek</p>
+
+  <div class="controls">
+    <button onclick="pick('movie')">🎬 Film</button>
+    <button onclick="pick('series')">📺 Serie</button>
+    <button onclick="pick('')">🔀 Alles</button>
+  </div>
+
+  <div class="filters">
+    <label>Anbieter <select id="provider"><option value="">Alle</option></select></label>
+    <button class="secondary" onclick="scan()">🔄 Bibliothek aktualisieren</button>
+  </div>
+
+  <div id="status">Bibliothek wird geladen …</div>
+  <div id="result" class="result hidden"></div>
+</div>
+
+<script>
+async function loadStats() {
+  const r = await fetch('/api/stats');
+  const s = await r.json();
+  const select = document.getElementById('provider');
+  select.innerHTML = '<option value="">Alle</option>' + s.providers.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+  document.getElementById('status').textContent = `${s.total} Einträge · ${s.movies} Filme · ${s.series} Serien`;
+}
+
+async function scan() {
+  document.getElementById('status').textContent = 'Bibliothek wird gescannt …';
+  const r = await fetch('/api/scan', {method: 'POST'});
+  const data = await r.json();
+  document.getElementById('status').textContent = `${data.count} Einträge gefunden.`;
+  await loadStats();
+}
+
+async function pick(kind) {
+  const provider = document.getElementById('provider').value;
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (provider) params.set('provider', provider);
+  const r = await fetch('/api/random?' + params.toString());
+  const data = await r.json();
+  const box = document.getElementById('result');
+  if (!data.success) {
+    box.className = 'result';
+    box.innerHTML = `<h2>😕 Nichts gefunden</h2><p>${escapeHtml(data.message)}</p>`;
+    return;
+  }
+  const x = data.item;
+  box.className = 'result';
+  box.innerHTML = `
+    <div class="type">${x.kind === 'movie' ? '🎬 FILM' : '📺 SERIE'}</div>
+    <h2>${escapeHtml(x.title)}</h2>
+    <div class="meta">${escapeHtml(x.provider)}${x.year ? ' · ' + x.year : ''}${x.rating != null ? ' · ⭐ ' + Number(x.rating).toFixed(1) : ''}${x.runtime ? ' · ' + x.runtime + ' min' : ''}</div>
+    ${x.genres ? `<div class="genres">${escapeHtml(x.genres)}</div>` : ''}
+    ${x.plot ? `<p>${escapeHtml(x.plot)}</p>` : '<p>Keine Beschreibung in den vorhandenen Metadaten.</p>'}
+    <button onclick="pick('${x.kind}')">🔀 Noch einen</button>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+
+loadStats();
+</script>
+{% endblock %}

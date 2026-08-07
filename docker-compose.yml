@@ -1,0 +1,14 @@
+services:
+  media-roulette:
+    build: .
+    container_name: media-roulette
+    ports:
+      - "8000:8000"
+    environment:
+      MOVIES_DIR: /data/movies
+      SERIES_DIR: /data/series
+      DATABASE_PATH: /state/media-roulette.db
+    volumes:
+      - /mnt/data:/data:ro
+      - ./state:/state
+    restart: unless-stopped
