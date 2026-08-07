@@ -21,7 +21,9 @@ def _nfo_value(root: ET.Element, name: str) -> str | None:
     return _clean(node.text if node is not None else None)
 
 
-def parse_nfo(path: Path) -> dict[str, Any]:
+def parse_nfo(path: Path | None) -> dict[str, Any]:
+    if not path:
+        return {}
     try:
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError):
@@ -33,7 +35,8 @@ def parse_nfo(path: Path) -> dict[str, Any]:
         if value:
             data[field] = value
 
-    genres = [_clean(n.text) for n in root.findall("genre") if _clean(n.text)]
+    genres = [_clean(n.text) for n in root.findall("genre")]
+    genres = [g for g in genres if g]
     if genres:
         data["genres"] = ", ".join(genres)
     return data
@@ -45,7 +48,7 @@ def parse_name(name: str) -> tuple[str, int | None]:
     match = re.search(r"\b(19\d{2}|20\d{2})\b", text)
     year = int(match.group(1)) if match else None
     if match:
-        text = text[: match.start()].strip(" -")
+        text = text[:match.start()].strip(" -")
     return re.sub(r"\s+", " ", text).strip(), year
 
 
@@ -58,12 +61,13 @@ class Library:
 
     def _connect(self):
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_db(self):
         with self._connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS media (
                     id INTEGER PRIMARY KEY,
@@ -85,45 +89,57 @@ class Library:
 
     def _find_nfo(self, folder: Path, preferred: str) -> Path | None:
         candidates = [folder / preferred, folder / "movie.nfo", folder / "tvshow.nfo"]
-        candidates += sorted(folder.glob("*.nfo"))
+        candidates.extend(sorted(folder.glob("*.nfo")))
         return next((p for p in candidates if p.is_file()), None)
+
+    def _has_video(self, folder: Path) -> bool:
+        try:
+            return any(f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS for f in folder.rglob("*"))
+        except OSError:
+            return False
 
     def _scan_root(self, root: Path, kind: str) -> list[dict[str, Any]]:
         if not root.exists() or not root.is_dir():
             return []
-        items = []
-        for provider_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-            provider = provider_dir.name
-            for item in sorted(p for p in provider_dir.iterdir() if p.is_dir()):
-                nfo = self._find_nfo(item, "tvshow.nfo" if kind == "series" else "movie.nfo")
-                data = parse_nfo(nfo) if nfo else {}
-                title, year = parse_name(item.name)
 
-                if not nfo:
-                    has_video = any(
-                        f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
-                        for f in item.rglob("*")
-                    )
-                    if not has_video:
-                        continue
+        result = []
+        try:
+            providers = [p for p in root.iterdir() if p.is_dir()]
+        except OSError:
+            return []
+
+        for provider_dir in sorted(providers):
+            try:
+                folders = [p for p in provider_dir.iterdir() if p.is_dir()]
+            except OSError:
+                continue
+
+            for item in sorted(folders):
+                nfo = self._find_nfo(item, "tvshow.nfo" if kind == "series" else "movie.nfo")
+                if not nfo and not self._has_video(item):
+                    continue
+
+                data = parse_nfo(nfo)
+                title, year = parse_name(item.name)
+                try:
+                    year = int(data.get("year")) if data.get("year") else year
+                except ValueError:
+                    pass
 
                 try:
                     rating = float(data["rating"]) if data.get("rating") else None
                 except (TypeError, ValueError):
                     rating = None
+
                 try:
                     runtime = int(float(data["runtime"])) if data.get("runtime") else None
                 except (TypeError, ValueError):
                     runtime = None
-                try:
-                    year = int(data["year"]) if data.get("year") else year
-                except (TypeError, ValueError):
-                    pass
 
-                items.append({
+                result.append({
                     "kind": kind,
-                    "provider": provider,
-                    "title": data.get("title") or title,
+                    "provider": provider_dir.name,
+                    "title": data.get("title") or title or item.name,
                     "year": year,
                     "plot": data.get("plot"),
                     "genres": data.get("genres"),
@@ -132,27 +148,36 @@ class Library:
                     "path": str(item),
                     "nfo_path": str(nfo) if nfo else None,
                 })
-        return items
+        return result
 
     def scan(self) -> int:
         items = self._scan_root(self.movies_dir, "movie") + self._scan_root(self.series_dir, "series")
-        paths = {i["path"] for i in items}
+        paths = {item["path"] for item in items}
+
         with self._connect() as db:
-            for item in items:
-                db.execute("""
-                    INSERT INTO media(kind, provider, title, year, plot, genres, rating, runtime, path, nfo_path, updated_at)
-                    VALUES(:kind, :provider, :title, :year, :plot, :genres, :rating, :runtime, :path, :nfo_path, CURRENT_TIMESTAMP)
-                    ON CONFLICT(path) DO UPDATE SET
-                      kind=excluded.kind, provider=excluded.provider, title=excluded.title,
-                      year=excluded.year, plot=excluded.plot, genres=excluded.genres,
-                      rating=excluded.rating, runtime=excluded.runtime, nfo_path=excluded.nfo_path,
-                      updated_at=CURRENT_TIMESTAMP
-                """, item)
-            if paths:
-                placeholders = ",".join("?" for _ in paths)
-                db.execute(f"DELETE FROM media WHERE path NOT IN ({placeholders})", tuple(paths))
-            else:
-                db.execute("DELETE FROM media")
+            try:
+                db.execute("BEGIN")
+                for item in items:
+                    db.execute("""
+                        INSERT INTO media(kind, provider, title, year, plot, genres, rating, runtime, path, nfo_path, updated_at)
+                        VALUES(:kind,:provider,:title,:year,:plot,:genres,:rating,:runtime,:path,:nfo_path,CURRENT_TIMESTAMP)
+                        ON CONFLICT(path) DO UPDATE SET
+                        kind=excluded.kind, provider=excluded.provider, title=excluded.title,
+                        year=excluded.year, plot=excluded.plot, genres=excluded.genres,
+                        rating=excluded.rating, runtime=excluded.runtime,
+                        nfo_path=excluded.nfo_path, updated_at=CURRENT_TIMESTAMP
+                    """, item)
+
+                if paths:
+                    placeholders = ",".join("?" * len(paths))
+                    db.execute(f"DELETE FROM media WHERE path NOT IN ({placeholders})", tuple(paths))
+                else:
+                    db.execute("DELETE FROM media")
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+
         return len(items)
 
     def random_item(self, kind: str | None = None, provider: str | None = None) -> dict[str, Any] | None:
@@ -171,8 +196,9 @@ class Library:
 
     def stats(self) -> dict[str, Any]:
         with self._connect() as db:
-            total = db.execute("SELECT COUNT(*) FROM media").fetchone()[0]
-            movies = db.execute("SELECT COUNT(*) FROM media WHERE kind='movie'").fetchone()[0]
-            series = db.execute("SELECT COUNT(*) FROM media WHERE kind='series'").fetchone()[0]
-            providers = [r[0] for r in db.execute("SELECT DISTINCT provider FROM media ORDER BY provider")]
-        return {"total": total, "movies": movies, "series": series, "providers": providers}
+            return {
+                "total": db.execute("SELECT COUNT(*) FROM media").fetchone()[0],
+                "movies": db.execute("SELECT COUNT(*) FROM media WHERE kind='movie'").fetchone()[0],
+                "series": db.execute("SELECT COUNT(*) FROM media WHERE kind='series'").fetchone()[0],
+                "providers": [r[0] for r in db.execute("SELECT DISTINCT provider FROM media ORDER BY provider")],
+            }
