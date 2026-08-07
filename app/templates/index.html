@@ -51,14 +51,15 @@ async function pick(kind) {
     return;
   }
   const x = data.item;
-  box.className = 'result';
+  box.className = 'result poster-card';
   box.innerHTML = `
-    <div class="type">${x.kind === 'movie' ? '🎬 FILM' : '📺 SERIE'}</div>
+    <div class="poster-placeholder">${x.kind === 'movie' ? '🎬' : '📺'}</div>
+    <div class="type">${x.kind === 'movie' ? 'FILM' : 'SERIE'}</div>
     <h2>${escapeHtml(x.title)}</h2>
     <div class="meta">${escapeHtml(x.provider)}${x.year ? ' · ' + x.year : ''}${x.rating != null ? ' · ⭐ ' + Number(x.rating).toFixed(1) : ''}${x.runtime ? ' · ' + x.runtime + ' min' : ''}</div>
     ${x.genres ? `<div class="genres">${escapeHtml(x.genres)}</div>` : ''}
     ${x.plot ? `<p>${escapeHtml(x.plot)}</p>` : '<p>Keine Beschreibung in den vorhandenen Metadaten.</p>'}
-    <button onclick="pick('${x.kind}')">🔀 Noch einen</button>`;
+    <button onclick="pick('${x.kind}')">🔀 Noch eine Empfehlung</button>`;
 }
 
 function escapeHtml(value) {
