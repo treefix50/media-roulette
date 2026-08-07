@@ -1,3 +1,4 @@
+import logging
 import os
 
 from fastapi import APIRouter, Request
@@ -6,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.library import Library
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
@@ -29,21 +31,33 @@ async def test():
 
 @router.post("/api/scan")
 async def scan():
-    count = library.scan()
-    return {"success": True, "count": count, "stats": library.stats()}
+    try:
+        count = library.scan()
+        return {"success": True, "count": count, "stats": library.stats()}
+    except Exception:
+        logger.exception("Manual library scan failed")
+        return {"success": False, "message": "Bibliothek konnte nicht gescannt werden."}
 
 
 @router.get("/api/stats")
 async def stats():
-    return library.stats()
+    try:
+        return library.stats()
+    except Exception:
+        logger.exception("Loading stats failed")
+        return {"total": 0, "movies": 0, "series": 0, "providers": []}
 
 
 @router.get("/api/random")
 async def random_media(kind: str | None = None, provider: str | None = None):
-    item = public_item(library.random_item(kind, provider))
-    if not item:
-        return {"success": False, "message": "Keine passenden Medien gefunden."}
-    return {"success": True, "item": item}
+    try:
+        item = public_item(library.random_item(kind, provider))
+        if not item:
+            return {"success": False, "message": "Keine passenden Medien gefunden."}
+        return {"success": True, "item": item}
+    except Exception:
+        logger.exception("Random recommendation failed")
+        return {"success": False, "message": "Keine Empfehlung verfügbar."}
 
 
 @router.get("/", response_class=HTMLResponse)
