@@ -16,6 +16,12 @@ library = Library(
 )
 
 
+def public_item(item: dict | None):
+    if not item:
+        return None
+    return {k: v for k, v in item.items() if k not in {"path", "nfo_path"}}
+
+
 @router.get("/api/test")
 async def test():
     return {"status": "ok", "message": "Media Roulette läuft"}
@@ -34,7 +40,7 @@ async def stats():
 
 @router.get("/api/random")
 async def random_media(kind: str | None = None, provider: str | None = None):
-    item = library.random_item(kind, provider)
+    item = public_item(library.random_item(kind, provider))
     if not item:
         return {"success": False, "message": "Keine passenden Medien gefunden."}
     return {"success": True, "item": item}
