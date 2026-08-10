@@ -55,11 +55,10 @@ async def random_media(
     exclude: str | None = None,
 ):
     try:
-        exclude_paths = [p for p in (exclude or "").split("\n") if p]
-        item = public_item(library.random_item(kind, provider, exclude_paths))
-        if not item and exclude_paths:
-            # If the recent list contains the whole matching library, relax it so
-            # the roulette never gets stuck without a recommendation.
+        # The client only sends title keys, never filesystem paths.
+        exclude_titles = [p for p in (exclude or "").split("\n") if p]
+        item = public_item(library.random_item(kind, provider, exclude_titles=exclude_titles))
+        if not item and exclude_titles:
             item = public_item(library.random_item(kind, provider))
         if not item:
             return {"success": False, "message": "Keine passenden Medien gefunden."}
