@@ -36,7 +36,7 @@ async def scan():
         return {"success": True, "count": count, "stats": library.stats()}
     except Exception:
         logger.exception("Manual library scan failed")
-        return {"success": False, "message": "Bibliothek konnte nicht gescannt werden."}
+        return {"success": False, "message": "Bibliothek konnte nicht aktualisiert werden."}
 
 
 @router.get("/api/stats")
@@ -49,9 +49,18 @@ async def stats():
 
 
 @router.get("/api/random")
-async def random_media(kind: str | None = None, provider: str | None = None):
+async def random_media(
+    kind: str | None = None,
+    provider: str | None = None,
+    exclude: str | None = None,
+):
     try:
-        item = public_item(library.random_item(kind, provider))
+        exclude_paths = [p for p in (exclude or "").split("\n") if p]
+        item = public_item(library.random_item(kind, provider, exclude_paths))
+        if not item and exclude_paths:
+            # If the recent list contains the whole matching library, relax it so
+            # the roulette never gets stuck without a recommendation.
+            item = public_item(library.random_item(kind, provider))
         if not item:
             return {"success": False, "message": "Keine passenden Medien gefunden."}
         return {"success": True, "item": item}
