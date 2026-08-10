@@ -102,14 +102,8 @@ class Library:
             return False
 
     def _scan_root(self, root: Path, kind: str) -> tuple[list[dict[str, Any]], bool]:
-        """Return items and whether the root was actually reachable.
-
-        An unavailable mount is deliberately different from an empty library:
-        an unavailable root must never cause existing records to be deleted.
-        """
         if not root.exists() or not root.is_dir():
             return [], False
-
         result = []
         try:
             providers = [p for p in root.iterdir() if p.is_dir()]
@@ -121,12 +115,10 @@ class Library:
                 folders = [p for p in provider_dir.iterdir() if p.is_dir()]
             except OSError:
                 continue
-
             for item in sorted(folders):
                 nfo = self._find_nfo(item, "tvshow.nfo" if kind == "series" else "movie.nfo")
                 if not nfo and not self._has_video(item):
                     continue
-
                 data = parse_nfo(nfo)
                 title, year = parse_name(item.name)
                 try:
@@ -141,7 +133,6 @@ class Library:
                     runtime = int(float(data["runtime"])) if data.get("runtime") else None
                 except (TypeError, ValueError):
                     runtime = None
-
                 result.append({
                     "kind": kind,
                     "provider": provider_dir.name,
@@ -177,8 +168,6 @@ class Library:
                         nfo_path=excluded.nfo_path, updated_at=CURRENT_TIMESTAMP
                     """, item)
 
-                # Only reconcile a media type when its root was reachable.
-                # A temporarily missing mount therefore cannot wipe the index.
                 if movies_ok:
                     movie_paths = {x["path"] for x in movie_items}
                     if movie_paths:
@@ -194,18 +183,16 @@ class Library:
                     else:
                         db.execute("DELETE FROM media WHERE kind='series'")
                 db.commit()
-
-            return len(items) + (self.stats()["total"] - len(items) if not movies_ok or not series_ok else 0)
-        except Exception:
-            try:
-                db.rollback()
-            except Exception:
-                pass
-            raise
+                return db.execute("SELECT COUNT(*) FROM media").fetchone()[0]
         finally:
             self._scan_lock.release()
 
-    def random_item(self, kind: str | None = None, provider: str | None = None, exclude_paths: list[str] | None = None) -> dict[str, Any] | None:
+    def random_item(
+        self,
+        kind: str | None = None,
+        provider: str | None = None,
+        exclude_titles: list[str] | None = None,
+    ) -> dict[str, Any] | None:
         query = "SELECT * FROM media WHERE 1=1"
         params: list[Any] = []
         if kind in {"movie", "series"}:
@@ -214,9 +201,9 @@ class Library:
         if provider:
             query += " AND provider=?"
             params.append(provider)
-        excluded = [p for p in (exclude_paths or []) if p]
+        excluded = [p for p in (exclude_titles or []) if p]
         if excluded:
-            query += " AND path NOT IN (" + ",".join("?" * len(excluded)) + ")"
+            query += " AND title NOT IN (" + ",".join("?" * len(excluded)) + ")"
             params.extend(excluded)
         query += " ORDER BY RANDOM() LIMIT 1"
         with self._connect() as db:
