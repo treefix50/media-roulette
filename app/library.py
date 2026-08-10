@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -57,12 +58,14 @@ class Library:
         self.db_path = db_path
         self.movies_dir = Path(movies_dir)
         self.series_dir = Path(series_dir)
+        self._scan_lock = threading.Lock()
         self._init_db()
 
     def _connect(self):
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init_db(self):
@@ -98,44 +101,38 @@ class Library:
         except OSError:
             return False
 
-    def _scan_root(self, root: Path, kind: str) -> list[dict[str, Any]]:
+    def _scan_root(self, root: Path, kind: str) -> tuple[list[dict[str, Any]], bool]:
         if not root.exists() or not root.is_dir():
-            return []
-
+            return [], False
         result = []
         try:
             providers = [p for p in root.iterdir() if p.is_dir()]
         except OSError:
-            return []
+            return [], False
 
         for provider_dir in sorted(providers):
             try:
                 folders = [p for p in provider_dir.iterdir() if p.is_dir()]
             except OSError:
                 continue
-
             for item in sorted(folders):
                 nfo = self._find_nfo(item, "tvshow.nfo" if kind == "series" else "movie.nfo")
                 if not nfo and not self._has_video(item):
                     continue
-
                 data = parse_nfo(nfo)
                 title, year = parse_name(item.name)
                 try:
                     year = int(data.get("year")) if data.get("year") else year
-                except ValueError:
+                except (TypeError, ValueError):
                     pass
-
                 try:
                     rating = float(data["rating"]) if data.get("rating") else None
                 except (TypeError, ValueError):
                     rating = None
-
                 try:
                     runtime = int(float(data["runtime"])) if data.get("runtime") else None
                 except (TypeError, ValueError):
                     runtime = None
-
                 result.append({
                     "kind": kind,
                     "provider": provider_dir.name,
@@ -148,14 +145,17 @@ class Library:
                     "path": str(item),
                     "nfo_path": str(nfo) if nfo else None,
                 })
-        return result
+        return result, True
 
     def scan(self) -> int:
-        items = self._scan_root(self.movies_dir, "movie") + self._scan_root(self.series_dir, "series")
-        paths = {item["path"] for item in items}
+        if not self._scan_lock.acquire(blocking=False):
+            return self.stats()["total"]
+        try:
+            movie_items, movies_ok = self._scan_root(self.movies_dir, "movie")
+            series_items, series_ok = self._scan_root(self.series_dir, "series")
+            items = movie_items + series_items
 
-        with self._connect() as db:
-            try:
+            with self._connect() as db:
                 db.execute("BEGIN")
                 for item in items:
                     db.execute("""
@@ -168,19 +168,31 @@ class Library:
                         nfo_path=excluded.nfo_path, updated_at=CURRENT_TIMESTAMP
                     """, item)
 
-                if paths:
-                    placeholders = ",".join("?" * len(paths))
-                    db.execute(f"DELETE FROM media WHERE path NOT IN ({placeholders})", tuple(paths))
-                else:
-                    db.execute("DELETE FROM media")
+                if movies_ok:
+                    movie_paths = {x["path"] for x in movie_items}
+                    if movie_paths:
+                        placeholders = ",".join("?" * len(movie_paths))
+                        db.execute(f"DELETE FROM media WHERE kind='movie' AND path NOT IN ({placeholders})", tuple(movie_paths))
+                    else:
+                        db.execute("DELETE FROM media WHERE kind='movie'")
+                if series_ok:
+                    series_paths = {x["path"] for x in series_items}
+                    if series_paths:
+                        placeholders = ",".join("?" * len(series_paths))
+                        db.execute(f"DELETE FROM media WHERE kind='series' AND path NOT IN ({placeholders})", tuple(series_paths))
+                    else:
+                        db.execute("DELETE FROM media WHERE kind='series'")
                 db.commit()
-            except Exception:
-                db.rollback()
-                raise
+                return db.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+        finally:
+            self._scan_lock.release()
 
-        return len(items)
-
-    def random_item(self, kind: str | None = None, provider: str | None = None) -> dict[str, Any] | None:
+    def random_item(
+        self,
+        kind: str | None = None,
+        provider: str | None = None,
+        exclude_titles: list[str] | None = None,
+    ) -> dict[str, Any] | None:
         query = "SELECT * FROM media WHERE 1=1"
         params: list[Any] = []
         if kind in {"movie", "series"}:
@@ -189,6 +201,10 @@ class Library:
         if provider:
             query += " AND provider=?"
             params.append(provider)
+        excluded = [p for p in (exclude_titles or []) if p]
+        if excluded:
+            query += " AND title NOT IN (" + ",".join("?" * len(excluded)) + ")"
+            params.extend(excluded)
         query += " ORDER BY RANDOM() LIMIT 1"
         with self._connect() as db:
             row = db.execute(query, params).fetchone()
