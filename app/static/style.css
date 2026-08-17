@@ -1,15 +1,477 @@
-* { box-sizing: border-box; }
-body { margin: 0; background: #111; color: #eee; font-family: Arial, sans-serif; }
-.container { max-width: 850px; margin: 60px auto; padding: 24px; text-align: center; }
-h1 { font-size: 42px; margin-bottom: 8px; }
-.controls, .filters { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 28px 0; }
-button, select { padding: 12px 18px; font-size: 16px; border-radius: 8px; border: 1px solid #555; background: #222; color: #eee; cursor: pointer; }
-button:hover { background: #333; }
-.secondary { font-size: 14px; }
-#status { color: #aaa; margin: 20px; }
-.result { margin: 35px auto; max-width: 680px; padding: 32px; border: 1px solid #444; border-radius: 16px; background: #1a1a1a; text-align: left; }
-.result h2 { font-size: 34px; margin: 8px 0 12px; }
-.type { font-size: 13px; letter-spacing: 1px; color: #aaa; }
-.meta { color: #bbb; margin-bottom: 14px; }
-.genres { display: inline-block; padding: 6px 10px; border-radius: 20px; background: #292929; margin-bottom: 10px; }
-.hidden { display: none; }
+/* ============================================
+   Media Roulette - Responsive Stylesheet
+   Optimiert für Smartphone | Tablet | Desktop
+   ============================================ */
+
+/* RESET & BASE */
+* { 
+    box-sizing: border-box; 
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+}
+
+body { 
+    background: #111; 
+    color: #eee; 
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', Arial, sans-serif; 
+    line-height: 1.6;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* CONTAINER */
+.container { 
+    max-width: 1100px; 
+    margin: 0 auto; 
+    padding: clamp(16px, 4vw, 40px); 
+    text-align: center; 
+    flex: 1;
+}
+
+/* HEADINGS */
+h1 { 
+    font-size: clamp(1.75rem, 5vw, 2.75rem); 
+    margin-bottom: 12px; 
+    color: #fff;
+    line-height: 1.2;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.subtitle {
+    color: #aaa;
+    margin-top: 0;
+    margin-bottom: 24px;
+    font-size: clamp(0.9rem, 2.5vw, 1.1rem);
+    font-weight: 400;
+}
+
+/* CONTROLS / FILTER BAR */
+.controls, .filters { 
+    display: flex; 
+    gap: clamp(8px, 2vw, 16px); 
+    justify-content: center; 
+    flex-wrap: wrap; 
+    margin: clamp(20px, 4vw, 32px) 0; 
+}
+
+/* BUTTONS & SELECTS */
+button, select { 
+    padding: clamp(12px, 2.5vw, 16px) clamp(16px, 3vw, 24px); 
+    font-size: clamp(15px, 2vw, 17px); 
+    border-radius: 10px; 
+    border: 1.5px solid #555; 
+    background: linear-gradient(180deg, #2a2a2a, #222); 
+    color: #eee; 
+    cursor: pointer;
+    min-width: 120px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+button:hover:not(:disabled):not(.secondary) { 
+    background: linear-gradient(180deg, #353535, #2a2a2a); 
+    border-color: #777;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+button:active:not(:disabled):not(.secondary) {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: grayscale(0.5);
+}
+
+button.secondary {
+    background: #1a1a1a;
+    border: 1px solid #444;
+    font-size: clamp(14px, 2vw, 16px);
+    padding: clamp(10px, 2vw, 14px) clamp(14px, 2.5vw, 20px);
+}
+
+button.secondary:hover {
+    background: #222;
+    border-color: #666;
+}
+
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23aaa' d='M4 6l4 4 4-4z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 40px;
+}
+
+select:focus, button:focus {
+    border-color: #6d4aff;
+    box-shadow: 0 0 0 3px rgba(109, 74, 255, 0.3);
+}
+
+/* STATUS TEXT */
+#status { 
+    color: #999; 
+    margin: 16px 0; 
+    font-size: clamp(13px, 2vw, 15px);
+    min-height: 24px;
+}
+
+/* RESULT CARD */
+.result { 
+    margin: clamp(24px, 5vw, 40px) auto; 
+    max-width: 750px; 
+    padding: clamp(20px, 4vw, 32px); 
+    border: 1px solid #444; 
+    border-radius: 20px; 
+    background: linear-gradient(145deg, #1a1a1a, #151515); 
+    text-align: left;
+    animation: fadeIn 0.4s ease;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    position: relative;
+    overflow: hidden;
+}
+
+.result::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #6d4aff, #8b7dff);
+}
+
+@keyframes fadeIn {
+    from { 
+        opacity: 0; 
+        transform: translateY(15px) scale(0.98); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0) scale(1); 
+    }
+}
+
+.result h2 { 
+    font-size: clamp(1.4rem, 4vw, 2rem); 
+    margin: 10px 0 12px; 
+    color: #fff;
+    line-height: 1.3;
+    font-weight: 600;
+}
+
+.result h2 small {
+    font-size: 0.7em;
+    color: #888;
+    font-weight: 400;
+}
+
+.type { 
+    font-size: 12px; 
+    letter-spacing: 1.5px; 
+    color: #7d7d7d;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.meta { 
+    color: #bbb; 
+    margin-bottom: 14px;
+    font-size: clamp(14px, 2.2vw, 15px);
+    line-height: 1.5;
+}
+
+.genres { 
+    display: flex; 
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+
+.genre-tag {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 16px;
+    background: #222;
+    color: #ccc;
+    font-size: 13px;
+    border: 1px solid #333;
+}
+
+.result p {
+    margin: 14px 0;
+    color: #ccc;
+    font-size: clamp(15px, 2.2vw, 17px);
+    line-height: 1.7;
+    text-align: justify;
+}
+
+.poster-card {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+}
+
+@media (min-width: 600px) {
+    .poster-card {
+        grid-template-columns: 140px 1fr;
+        align-items: start;
+    }
+    
+    .poster-card .type {
+        grid-column: 1 / -1;
+    }
+}
+
+/* PLACEHOLDER / LOADING STATE */
+.result.loading {
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.result.loading::after {
+    content: '';
+    width: 40px;
+    height: 40px;
+    border: 4px solid #333;
+    border-top-color: #6d4aff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ERROR STATE */
+.result.error {
+    background: linear-gradient(145deg, #2a1a1a, #1a1010);
+    border-color: #633;
+}
+
+.result.error::before {
+    background: linear-gradient(90deg, #ff4444, #ff6666);
+}
+
+/* INFO STATE */
+.result.info {
+    background: linear-gradient(145deg, #1a222a, #10151a);
+    border-color: #366;
+}
+
+.result.info::before {
+    background: linear-gradient(90deg, #4488ff, #6699ff);
+}
+
+/* FOOTER */
+footer {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-size: 13px;
+    margin-top: auto;
+    border-top: 1px solid #222;
+}
+
+/* ============================================
+   SMARTPHONE OPTIMIERUNGEN (≤ 600px)
+   ============================================ */
+@media (max-width: 600px) {
+    html {
+        font-size: 15px;
+    }
+    
+    .container {
+        padding: 20px 16px;
+    }
+    
+    /* Controls werden vertikal gestackt */
+    .controls {
+        flex-direction: column;
+        width: 100%;
+    }
+    
+    .controls button, 
+    .controls select {
+        width: 100%;
+        min-width: unset;
+    }
+    
+    /* Größere Touch-Targets */
+    button, select {
+        padding: 16px 20px;
+        font-size: 17px;
+        min-height: 52px;
+    }
+    
+    /* Compactere Cards */
+    .result {
+        padding: 18px;
+        margin: 20px 16px;
+        border-radius: 16px;
+    }
+    
+    .poster-card {
+        grid-template-columns: 1fr !important;
+    }
+    
+    /* Font-Size Anpassungen */
+    h1 {
+        margin-bottom: 8px;
+    }
+    
+    .subtitle {
+        margin-bottom: 20px;
+    }
+    
+    .result h2 {
+        font-size: 1.3rem;
+    }
+}
+
+/* ============================================
+   TABLET OPTIMIERUNGEN (601px - 1024px)
+   ============================================ */
+@media (min-width: 601px) and (max-width: 1024px) {
+    .container {
+        padding: 32px 24px;
+    }
+    
+    .poster-card {
+        grid-template-columns: 160px 1fr;
+    }
+    
+    .controls {
+        flex-wrap: wrap;
+    }
+    
+    button, select {
+        min-width: 140px;
+    }
+}
+
+/* ============================================
+   LARGE DESKTOP (> 1024px)
+   ============================================ */
+@media (min-width: 1025px) {
+    .container {
+        max-width: 1100px;
+    }
+    
+    .result {
+        max-width: 850px;
+    }
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+@media print {
+    body {
+        background: #fff;
+        color: #000;
+    }
+    
+    .controls, footer {
+        display: none;
+    }
+    
+    .result {
+        box-shadow: none;
+        border: 1px solid #ccc;
+    }
+}
+
+/* ============================================
+   DARK MODE PREFERENCES
+   ============================================ */
+@media (prefers-color-scheme: light) {
+    body {
+        background: #f5f5f5;
+        color: #222;
+    }
+    
+    .subtitle {
+        color: #666;
+    }
+    
+    button, select {
+        background: #fff;
+        border-color: #ddd;
+        color: #222;
+    }
+    
+    button:hover:not(:disabled) {
+        background: #fafafa;
+        border-color: #bbb;
+    }
+    
+    .result {
+        background: #fff;
+        border-color: #e0e0e0;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+    }
+    
+    .result::before {
+        background: linear-gradient(90deg, #5c3acc, #7a6edb);
+    }
+    
+    .type {
+        color: #888;
+    }
+    
+    .meta, .genres, p {
+        color: #444;
+    }
+    
+    .genre-tag {
+        background: #f0f0f0;
+        border-color: #ddd;
+        color: #555;
+    }
+}
+
+/* ============================================
+   REDUCED MOTION ACCESSIBILITY
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* ============================================
+   HIGH CONTRAST MODE
+   ============================================ */
+@media (prefers-contrast: high) {
+    button, select {
+        border-width: 2px;
+    }
+    
+    .result {
+        border-width: 2px;
+    }
+    
+    .genre-tag {
+        border-width: 2px;
+    }
+}
