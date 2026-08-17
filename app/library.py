@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".webm", ".ts", ".m2ts"}
+VALID_PROVIDERS = {"netflix", "prime", "peacock", "paramount", "sky", "disney", "max"}
 
 def _clean(value: str | None) -> str | None:
     """Entfernt überflüssige Leerzeichen und bereinigt Text."""
@@ -22,8 +23,8 @@ def _nfo_value(root: ET.Element, name: str) -> str | None:
     return _clean(node.text if node is not None else None)
 
 def parse_nfo(path: Path | None) -> dict[str, Any]:
-    """Parst NFO-Datei und extrahiert Metadaten inkl. Poster."""
-    if not path:
+    """Parst NFO-Datei und extrahiert Metadaten."""
+    if not path or not path.exists():
         return {}
     
     try:
@@ -45,7 +46,7 @@ def parse_nfo(path: Path | None) -> dict[str, Any]:
     if genres:
         data["genres"] = ", ".join(genres)
     
-    # TMDB-Rating: Wenn > 5, dann schon 10er Skala, sonst verdoppeln
+    # Rating: Falls <= 5, verdoppeln (TMDB hat 0-10, manche Quellen 0-5)
     rating = data.get("rating")
     if isinstance(rating, str):
         try:
@@ -56,7 +57,7 @@ def parse_nfo(path: Path | None) -> dict[str, Any]:
         rating = rating * 2
     data["rating"] = rating
     
-    # Laufzeit bereinigen (immer in Minuten)
+    # Laufzeit: Immer in Minuten
     runtime = data.get("runtime")
     if isinstance(runtime, str):
         try:
@@ -70,32 +71,8 @@ def parse_nfo(path: Path | None) -> dict[str, Any]:
     
     return data
 
-def determine_series_title_from_path(series_dir: Path, file_entry: Path) -> tuple[str, int | None]:
-    """Extrahiert Seriennamen aus Pfadstruktur: /tv/provider/Serienname/..."""
-    # Pfad: /tv/netflix/Serie-Y/episode.mkv
-    # Wir wollen: "Serie-Y"
-    try:
-        # Relativer Pfad vom series_dir
-        relative = file_entry.relative_to(series_dir)
-        parts = relative.parts
-        
-        # Teile: ['provider', 'Serienname', 'episode.mkv']
-        # Serienname ist zweite Komponente (Index 1)
-        if len(parts) >= 2:
-            series_name = parts[1]
-        elif len(parts) == 1:
-            series_name = parts[0]
-        else:
-            series_name = file_entry.stem
-        
-        # Parse Titel und Jahr aus Seriennamen
-        title, year = parse_name(series_name)
-        return title, year
-    except ValueError:
-        return file_entry.stem, None
-
 def parse_name(name: str) -> tuple[str, int | None]:
-    """Extrahiert Titel und Jahr aus Dateinamen oder Ordnername."""
+    """Extrahiert Titel und Jahr aus Ordnername oder Dateiname."""
     text = Path(name).stem
     text = re.sub(r"[._]", " ", text)
     
@@ -145,8 +122,6 @@ class Library:
                     genres TEXT,
                     rating REAL,
                     runtime INTEGER,
-                    poster TEXT,
-                    local_poster TEXT,
                     path TEXT NOT NULL UNIQUE,
                     nfo_path TEXT,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -159,150 +134,254 @@ class Library:
             db.execute("CREATE INDEX IF NOT EXISTS idx_media_title ON media(title)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_media_rating ON media(rating)")
 
+    def _is_valid_provider(self, folder_name: str) -> bool:
+        """Prüft ob Ordnername ein gültiger Provider ist."""
+        return folder_name.lower() in VALID_PROVIDERS
+
     def _scan_movies(self, root_dir: Path) -> list[dict[str, Any]]:
-        """Scant das movies-Verzeichnis nach Filmen."""
+        """Scant das movies-Verzeichnis nach Filmen.
+        
+        Struktur: /movies/PROVIDER/Filmname/video.mkv
+        Provider: erster Unterordner (z.B. 'netflix')
+        Filmname: zweiter Unterordner
+        """
         if not root_dir.exists():
             return []
 
         items = []
         
-        # Rekursiv alle Video-Dateien finden
-        for entry in sorted(root_dir.rglob("*")):
-            if not entry.is_file():
+        # Durchlaufe alle Provider-Ordner direkt unter root
+        for provider_dir in sorted(root_dir.iterdir()):
+            if not provider_dir.is_dir():
                 continue
-            if entry.suffix.lower() not in VIDEO_EXTENSIONS:
+            if not self._is_valid_provider(provider_dir.name):
                 continue
             
-            # Provider ermitteln (nächstes Eltern-Verzeichnis unter root)
-            # Pfad: /movies/provider/Filmname/video.mkv
-            relative = entry.relative_to(root_dir)
-            parts = relative.parts
+            provider_name = provider_dir.name.lower()
             
-            # Provider = erste Komponente
-            provider_name = parts[0] if len(parts) >= 1 else "unknown"
-            
-            # NFO-Datei suchen (im Filmordner)
-            nfo = None
-            possible_nfos = [
-                entry.parent / "movie.nfo",
-                entry.parent / f"{entry.stem}.nfo",
-            ]
-            for candidate in possible_nfos:
-                if candidate.exists():
-                    nfo = candidate
+            # Durchlaufe alle Film-Ordner unter Provider
+            for film_dir in sorted(provider_dir.iterdir()):
+                if not film_dir.is_dir():
+                    continue
+                
+                # NFO im Film-Ordner suchen
+                nfo = None
+                possible_nfos = [
+                    film_dir / "movie.nfo",
+                ]
+                # Auch nach .nfo Dateien im Film-Ordner suchen
+                for nfo_candidate in film_dir.glob("*.nfo"):
+                    nfo = nfo_candidate
                     break
-            
-            # Metadaten parsen
-            data = parse_nfo(nfo)
-            
-            # Titel und Jahr extrahieren
-            title = data.get("title")
-            year = data.get("year")
-            if not title:
-                # Titel aus Pfad extrahieren: /movies/provider/Filmname/video.mkv
-                if len(parts) >= 3:
-                    film_name = parts[2]
-                else:
-                    film_name = entry.stem
-                title, year_from_name = parse_name(film_name)
-                if not year:
-                    year = year_from_name
-            
-            items.append({
-                "kind": "movie",
-                "provider": provider_name,
-                "title": title or entry.name,
-                "year": year,
-                "plot": data.get("plot"),
-                "genres": data.get("genres"),
-                "rating": data.get("rating"),
-                "runtime": data.get("runtime"),
-                "path": str(entry),
-                "nfo_path": str(nfo) if nfo and nfo.exists() else None,
-            })
+                
+                # Metadaten parsen
+                data = parse_nfo(nfo)
+                
+                # Titel und Jahr extrahieren (aus Filmordner)
+                title = data.get("title")
+                year = data.get("year")
+                if not title:
+                    title, year_from_name = parse_name(film_dir.name)
+                    if not year:
+                        year = year_from_name
+                
+                # Erste Videodatei als Referenz-Pfad
+                first_video = None
+                for ext in VIDEO_EXTENSIONS:
+                    for video_file in film_dir.glob(f"*{ext}"):
+                        first_video = video_file
+                        break
+                    if first_video:
+                        break
+                
+                if not first_video:
+                    # Recursive search
+                    for video_file in film_dir.rglob("*"):
+                        if video_file.suffix.lower() in VIDEO_EXTENSIONS:
+                            first_video = video_file
+                            break
+                    if not first_video:
+                        continue
+                
+                items.append({
+                    "kind": "movie",
+                    "provider": provider_name,
+                    "title": title or first_video.stem,
+                    "year": year,
+                    "plot": data.get("plot"),
+                    "genres": data.get("genres"),
+                    "rating": data.get("rating"),
+                    "runtime": data.get("runtime"),
+                    "path": str(first_video),
+                    "nfo_path": str(nfo) if nfo and nfo.exists() else None,
+                })
 
         return items
 
     def _scan_series(self, root_dir: Path) -> list[dict[str, Any]]:
-        """Scant das tv-Verzeichnis nach Serien (auf Serien-Ebene, nicht Episoden)."""
+        """Scant das tv-Verzeichnis nach Serien.
+        
+        Struktur: /tv/SERIENNAME/Season 1/episode.mkv
+        Serienname: erster Unterordner unter tv (NICHT Provider!)
+        
+        WICHTIG: Bei deiner Struktur sind Provider-Ordner wie 'netflix'
+        NICHT direkt unter tv/, sondern der Serienname ist direkt unter tv/.
+        
+        Also: /tv/9-1-1/Season 1/episode.mkv -> Serie = "9-1-1"
+        
+        Falls du Provider-Ordner unter tv/ haben willst (wie bei Movies),
+        müsste die Struktur sein: /tv/netflix/Serienname/...
+        
+        Bitte klären, welche Struktur korrekt ist!
+        
+        AKTUELLE ANNAHME: Serien sind direkt unter /tv/, ohne Provider-Ordner
+        """
         if not root_dir.exists():
             return []
 
         items = []
-        
-        # Rekursiv nach Serienordnern suchen (nicht einzelnen Episoden)
-        # Struktur: /tv/provider/Serienname/episode1.mkv
-        # Wir wollen jeden Serienordner nur EINMAL scannen
-        
         scanned_series = set()
         
-        for entry in sorted(root_dir.rglob("*")):
-            if not entry.is_file():
-                continue
-            if entry.suffix.lower() not in VIDEO_EXTENSIONS:
-                continue
-            
-            # Pfad: /tv/provider/Serienname/episode.mkv
-            relative = entry.relative_to(root_dir)
-            parts = relative.parts
-            
-            if len(parts) < 3:
+        # Durchlaufe alle Serien-Ordner direkt unter root (tv/)
+        for series_dir in sorted(root_dir.iterdir()):
+            if not series_dir.is_dir():
                 continue
             
-            provider_name = parts[0]
-            series_name_folder = parts[1]  # Serienordner
-            
-            # Serien-Eindeutigkeit vermeiden (gleiche Serie nicht mehrfach)
-            series_key = f"{provider_name}:{series_name_folder}"
-            if series_key in scanned_series:
-                continue
-            scanned_series.add(series_key)
-            
-            # NFO-Datei im Serienordner suchen
-            nfo = None
-            possible_nfos = [
-                entry.parent / "tvshow.nfo",
-                entry.parent / "season.nfo",
-            ]
-            for candidate in possible_nfos:
-                if candidate.exists():
-                    nfo = candidate
-                    break
-            
-            # Falls kein NFO im aktuellen Ordner, im Elternordner suchen
-            if not nfo:
-                parent = Path(str(root_dir) + "/" + "/".join(parts[:2]))
-                possible_nfos_parent = [
-                    parent / "tvshow.nfo",
-                ]
-                for candidate in possible_nfos_parent:
-                    if candidate.exists():
-                        nfo = candidate
+            # Provider prüfen: Ist dies ein Provider-Ordner?
+            # Wenn JA: Struktur ist /tv/PROVIDER/SERIENNAME/...
+            if self._is_valid_provider(series_dir.name):
+                provider_name = series_dir.name.lower()
+                
+                # Dann durchlaufe Serien-Ordner unter Provider
+                for show_dir in sorted(series_dir.iterdir()):
+                    if not show_dir.is_dir():
+                        continue
+                    
+                    series_key = f"{provider_name}:{show_dir.name}"
+                    if series_key in scanned_series:
+                        continue
+                    scanned_series.add(series_key)
+                    
+                    # NFO im Serien-Ordner suchen (nicht in Season!)
+                    nfo = None
+                    possible_nfos = [
+                        show_dir / "tvshow.nfo",
+                    ]
+                    for nfo_candidate in show_dir.glob("*.nfo"):
+                        nfo = nfo_candidate
                         break
+                    
+                    # Metadaten parsen
+                    data = parse_nfo(nfo)
+                    
+                    # Serienname und Jahr extrahieren (aus Serienordner)
+                    title = data.get("title")
+                    year = data.get("year")
+                    if not title:
+                        title, year_from_name = parse_name(show_dir.name)
+                        if not year:
+                            year = year_from_name
+                    
+                    # First video finden (in Season-Ordner oder darunter)
+                    first_video = None
+                    for season_dir in show_dir.iterdir():
+                        if not season_dir.is_dir():
+                            continue
+                        # Ignoriere nicht-Season Ordner (wie Extras, Behind the Scenes)
+                        season_name_lower = season_dir.name.lower()
+                        if "season" in season_name_lower or "staffel" in season_name_lower:
+                            for video_file in season_dir.glob(f"*{next(iter(VIDEO_EXTENSIONS))}"):
+                                first_video = video_file
+                                break
+                            if first_video:
+                                break
+                    
+                    if not first_video:
+                        # Recursive search
+                        for video_file in show_dir.rglob("*"):
+                            if video_file.suffix.lower() in VIDEO_EXTENSIONS:
+                                first_video = video_file
+                                break
+                    
+                    if not first_video:
+                        continue
+                    
+                    items.append({
+                        "kind": "series",
+                        "provider": provider_name,
+                        "title": title or show_dir.name,
+                        "year": year,
+                        "plot": data.get("plot"),
+                        "genres": data.get("genres"),
+                        "rating": data.get("rating"),
+                        "runtime": data.get("runtime"),
+                        "path": str(first_video),
+                        "nfo_path": str(nfo) if nfo and nfo.exists() else None,
+                    })
             
-            # Metadaten parsen
-            data = parse_nfo(nfo)
-            
-            # Serienname und Jahr extrahieren (aus Ordnername, nicht Dateiname!)
-            title = data.get("title")
-            year = data.get("year")
-            if not title:
-                title, year_from_name = determine_series_title_from_path(root_dir, entry)
-                if not year:
-                    year = year_from_name
-            
-            items.append({
-                "kind": "series",
-                "provider": provider_name,
-                "title": title or series_name_folder,
-                "year": year,
-                "plot": data.get("plot"),
-                "genres": data.get("genres"),
-                "rating": data.get("rating"),
-                "runtime": data.get("runtime"),
-                "path": str(entry),  # Erste Video-Datei als Referenz
-                "nfo_path": str(nfo) if nfo and nfo.exists() else None,
-            })
+            else:
+                # KEIN Provider-Ordner, direkt Serie
+                # Struktur: /tv/SERIENNAME/...
+                # Dann Provider = "unknown" oder aus NFO extrahieren
+                series_key = series_dir.name
+                if series_key in scanned_series:
+                    continue
+                scanned_series.add(series_key)
+                
+                # NFO im Serien-Ordner suchen
+                nfo = None
+                possible_nfos = [
+                    series_dir / "tvshow.nfo",
+                ]
+                for nfo_candidate in series_dir.glob("*.nfo"):
+                    nfo = nfo_candidate
+                    break
+                
+                # Metadaten parsen
+                data = parse_nfo(nfo)
+                
+                # Serienname und Jahr extrahieren
+                title = data.get("title")
+                year = data.get("year")
+                if not title:
+                    title, year_from_name = parse_name(series_dir.name)
+                    if not year:
+                        year = year_from_name
+                
+                # First video finden
+                first_video = None
+                for season_dir in series_dir.iterdir():
+                    if not season_dir.is_dir():
+                        continue
+                    season_name_lower = season_dir.name.lower()
+                    if "season" in season_name_lower or "staffel" in season_name_lower:
+                        for video_file in season_dir.glob(f"*{next(iter(VIDEO_EXTENSIONS))}"):
+                            first_video = video_file
+                            break
+                        if first_video:
+                            break
+                
+                if not first_video:
+                    for video_file in series_dir.rglob("*"):
+                        if video_file.suffix.lower() in VIDEO_EXTENSIONS:
+                            first_video = video_file
+                            break
+                
+                if not first_video:
+                    continue
+                
+                items.append({
+                    "kind": "series",
+                    "provider": "unknown",
+                    "title": title or series_dir.name,
+                    "year": year,
+                    "plot": data.get("plot"),
+                    "genres": data.get("genres"),
+                    "rating": data.get("rating"),
+                    "runtime": data.get("runtime"),
+                    "path": str(first_video),
+                    "nfo_path": str(nfo) if nfo and nfo.exists() else None,
+                })
 
         return items
 
