@@ -40,6 +40,7 @@ def parse_nfo(path: Path | None) -> dict[str, Any]:
     genres = [g for g in genres if g]
     if genres:
         data["genres"] = ", ".join(genres)
+
     return data
 
 
@@ -89,67 +90,75 @@ class Library:
             """)
             db.execute("CREATE INDEX IF NOT EXISTS idx_media_kind ON media(kind)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_media_provider ON media(provider)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_media_title ON media(title)")
 
-    def _find_nfo(self, folder: Path, preferred: str) -> Path | None:
-        candidates = [folder / preferred, folder / "movie.nfo", folder / "tvshow.nfo"]
-        candidates.extend(sorted(folder.glob("*.nfo")))
-        return next((p for p in candidates if p.is_file()), None)
-
-    def _has_video(self, folder: Path) -> bool:
-        try:
-            return any(f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS for f in folder.rglob("*"))
-        except OSError:
-            return False
-
-    def _scan_root(self, root: Path, kind: str) -> tuple[list[dict[str, Any]], bool]:
-        if not root.exists() or not root.is_dir():
-            return [], False
-        result = []
-        try:
-            providers = [p for p in root.iterdir() if p.is_dir()]
-        except OSError:
+    def _scan_root(self, root_dir: Path, kind: str) -> tuple[list[dict[str, Any]], bool]:
+        if not root_dir.exists():
             return [], False
 
-        for provider_dir in sorted(providers):
-            try:
-                folders = [p for p in provider_dir.iterdir() if p.is_dir()]
-            except OSError:
+        items = []
+        for provider_dir in sorted(root_dir.iterdir()):
+            if not provider_dir.is_dir():
                 continue
-            for item in sorted(folders):
-                nfo = self._find_nfo(item, "tvshow.nfo" if kind == "series" else "movie.nfo")
-                if not nfo and not self._has_video(item):
+
+            for entry in sorted(provider_dir.rglob("*")):
+                if not entry.is_file():
                     continue
+                if entry.suffix.lower() not in VIDEO_EXTENSIONS:
+                    continue
+
+                nfo = None
+                if kind == "movie":
+                    nfo = entry.parent / "movie.nfo"
+                    if not nfo.exists():
+                        nfo = entry.parent / f"{entry.stem}.nfo"
+                elif kind == "series":
+                    nfo = entry.parent / "tvshow.nfo"
+                    if not nfo.exists():
+                        nfo = entry.parent / entry.name.replace(entry.suffix, ".nfo")
+
                 data = parse_nfo(nfo)
-                title, year = parse_name(item.name)
-                try:
-                    year = int(data.get("year")) if data.get("year") else year
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    rating = float(data["rating"]) if data.get("rating") else None
-                except (TypeError, ValueError):
-                    rating = None
-                try:
-                    runtime = int(float(data["runtime"])) if data.get("runtime") else None
-                except (TypeError, ValueError):
-                    runtime = None
-                result.append({
+                title = data.get("title")
+                year = data.get("year")
+                if not title:
+                    title, year_from_name = parse_name(entry.name)
+                    if not year:
+                        year = year_from_name
+
+                rating = data.get("rating")
+                if isinstance(rating, str):
+                    try:
+                        rating = float(rating)
+                    except ValueError:
+                        rating = None
+
+                runtime = data.get("runtime")
+                if isinstance(runtime, str):
+                    try:
+                        runtime = int(float(runtime))
+                    except ValueError:
+                        runtime = None
+
+                items.append({
                     "kind": kind,
                     "provider": provider_dir.name,
-                    "title": data.get("title") or title or item.name,
+                    "title": title or entry.name,
                     "year": year,
                     "plot": data.get("plot"),
                     "genres": data.get("genres"),
                     "rating": rating,
                     "runtime": runtime,
-                    "path": str(item),
-                    "nfo_path": str(nfo) if nfo else None,
+                    "path": str(entry),
+                    "nfo_path": str(nfo) if nfo and nfo.exists() else None,
                 })
-        return result, True
+
+        return items, True
 
     def scan(self) -> int:
         if not self._scan_lock.acquire(blocking=False):
-            return self.stats()["total"]
+            stats = self.stats()
+            return stats["total"]
+
         try:
             movie_items, movies_ok = self._scan_root(self.movies_dir, "movie")
             series_items, series_ok = self._scan_root(self.series_dir, "series")
@@ -157,16 +166,24 @@ class Library:
 
             with self._connect() as db:
                 db.execute("BEGIN")
+
                 for item in items:
                     db.execute("""
-                        INSERT INTO media(kind, provider, title, year, plot, genres, rating, runtime, path, nfo_path, updated_at)
-                        VALUES(:kind,:provider,:title,:year,:plot,:genres,:rating,:runtime,:path,:nfo_path,CURRENT_TIMESTAMP)
-                        ON CONFLICT(path) DO UPDATE SET
-                        kind=excluded.kind, provider=excluded.provider, title=excluded.title,
-                        year=excluded.year, plot=excluded.plot, genres=excluded.genres,
-                        rating=excluded.rating, runtime=excluded.runtime,
-                        nfo_path=excluded.nfo_path, updated_at=CURRENT_TIMESTAMP
-                    """, item)
+                        INSERT OR REPLACE INTO media 
+                        (kind, provider, title, year, plot, genres, rating, runtime, path, nfo_path, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (
+                        item["kind"],
+                        item["provider"],
+                        item["title"],
+                        item["year"],
+                        item["plot"],
+                        item["genres"],
+                        item["rating"],
+                        item["runtime"],
+                        item["path"],
+                        item["nfo_path"],
+                    ))
 
                 if movies_ok:
                     movie_paths = {x["path"] for x in movie_items}
@@ -175,6 +192,7 @@ class Library:
                         db.execute(f"DELETE FROM media WHERE kind='movie' AND path NOT IN ({placeholders})", tuple(movie_paths))
                     else:
                         db.execute("DELETE FROM media WHERE kind='movie'")
+
                 if series_ok:
                     series_paths = {x["path"] for x in series_items}
                     if series_paths:
@@ -182,8 +200,12 @@ class Library:
                         db.execute(f"DELETE FROM media WHERE kind='series' AND path NOT IN ({placeholders})", tuple(series_paths))
                     else:
                         db.execute("DELETE FROM media WHERE kind='series'")
+
                 db.commit()
-                return db.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+
+                total_count = db.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+                return total_count
+
         finally:
             self._scan_lock.release()
 
@@ -195,17 +217,22 @@ class Library:
     ) -> dict[str, Any] | None:
         query = "SELECT * FROM media WHERE 1=1"
         params: list[Any] = []
+
         if kind in {"movie", "series"}:
             query += " AND kind=?"
             params.append(kind)
+
         if provider:
             query += " AND provider=?"
             params.append(provider)
+
         excluded = [p for p in (exclude_titles or []) if p]
         if excluded:
             query += " AND title NOT IN (" + ",".join("?" * len(excluded)) + ")"
             params.extend(excluded)
+
         query += " ORDER BY RANDOM() LIMIT 1"
+
         with self._connect() as db:
             row = db.execute(query, params).fetchone()
             return dict(row) if row else None
@@ -216,5 +243,5 @@ class Library:
                 "total": db.execute("SELECT COUNT(*) FROM media").fetchone()[0],
                 "movies": db.execute("SELECT COUNT(*) FROM media WHERE kind='movie'").fetchone()[0],
                 "series": db.execute("SELECT COUNT(*) FROM media WHERE kind='series'").fetchone()[0],
-                "providers": [r[0] for r in db.execute("SELECT DISTINCT provider FROM media ORDER BY provider")],
+                "providers": [row["provider"] for row in db.execute("SELECT DISTINCT provider FROM media ORDER BY provider").fetchall()],
             }
