@@ -2,105 +2,125 @@
 
 {% block content %}
 <div class="container">
-  <h1>🎲 Media Roulette</h1>
-  <p>Keine Ahnung, was du schauen willst? Lass das Roulette entscheiden.</p>
+    <h1>😎 Media Roulette</h1>
+    <p class="subtitle">Finde dein nächstes Lieblingsmedium – zufällig, lokal, schnell.</p>
 
-  <div class="controls">
-    <button onclick="pick('movie')">🎬 Film</button>
-    <button onclick="pick('series')">📺 Serie</button>
-    <button onclick="pick('')">🔀 Egal</button>
-  </div>
+    <div class="controls">
+        <select id="kind-filter">
+            <option value="">Alle</option>
+            <option value="movie">Filme</option>
+            <option value="series">Serien</option>
+        </select>
+        <select id="provider-filter">
+            <option value="">Alle Anbieter</option>
+        </select>
+        <button id="spin-btn">🔀 Zufallsempfehlung</button>
+    </div>
 
-  <div class="filters">
-    <label>Anbieter
-      <select id="provider">
-        <option value="">Alle</option>
-      </select>
-    </label>
-    <button class="secondary" onclick="scan()">🔄 Bibliothek aktualisieren</button>
-  </div>
+    <div id="status" class="secondary">Lade Statistiken...</div>
 
-  <div id="status">Bibliothek wird geladen …</div>
-  <div id="result" class="result hidden"></div>
+    <div id="result"></div>
 </div>
 
 <script>
+const RECENT_LIMIT = 10;
 const recent = [];
-const RECENT_LIMIT = 8;
 
 async function loadStats() {
-  try {
-    const r = await fetch('/api/stats');
-    if (!r.ok) throw new Error();
-    const s = await r.json();
-    const select = document.getElementById('provider');
-    select.innerHTML = '<option value="">Alle</option>' + s.providers
-      .map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
-    document.getElementById('status').textContent = `${s.total} Empfehlungen verfügbar · ${s.movies} Filme · ${s.series} Serien`;
-  } catch {
-    document.getElementById('status').textContent = 'Bibliothek konnte nicht geladen werden.';
-  }
-}
+    try {
+        const res = await fetch('/api/stats');
+        const stats = await res.json();
+        document.getElementById('status').textContent =
+            `${stats.total} Medien (${stats.movies} Filme, ${stats.series} Serien) • ${stats.providers.length} Anbieter`;
 
-async function scan() {
-  document.getElementById('status').textContent = 'Bibliothek wird aktualisiert …';
-  try {
-    const r = await fetch('/api/scan', {method: 'POST'});
-    const data = await r.json();
-    if (!data.success) throw new Error(data.message);
-    await loadStats();
-  } catch (error) {
-    document.getElementById('status').textContent = error.message || 'Aktualisierung fehlgeschlagen.';
-  }
-}
-
-async function pick(kind) {
-  const button = event?.currentTarget;
-  if (button) button.disabled = true;
-  const provider = document.getElementById('provider').value;
-  const params = new URLSearchParams();
-  if (kind) params.set('kind', kind);
-  if (provider) params.set('provider', provider);
-  if (recent.length) params.set('exclude', recent.join('\n'));
-
-  try {
-    const r = await fetch('/api/random?' + params.toString());
-    const data = await r.json();
-    const box = document.getElementById('result');
-    if (!data.success) {
-      box.className = 'result';
-      box.innerHTML = `<h2>😕 Nichts gefunden</h2><p>${escapeHtml(data.message)}</p>`;
-      return;
+        const providerSelect = document.getElementById('provider-filter');
+        if (Array.isArray(stats.providers)) {
+            providerSelect.innerHTML = '<option value="">Alle Anbieter</option>';
+            for (const provider of stats.providers) {
+                const opt = document.createElement('option');
+                opt.value = provider;
+                opt.textContent = provider;
+                providerSelect.appendChild(opt);
+            }
+        }
+    } catch (err) {
+        document.getElementById('status').textContent = 'Statistiken nicht verfügbar.';
     }
+}
 
-    const x = data.item;
-    // The API intentionally hides filesystem paths; use title/kind as a stable
-    // client-side key so recent recommendations stay private and lightweight.
-    const key = `${x.kind}|${x.title}|${x.year || ''}|${x.provider || ''}`;
-    recent.unshift(key);
-    while (recent.length > RECENT_LIMIT) recent.pop();
+async function getRandomMedia() {
+    const btn = document.getElementById('spin-btn');
+    if (!btn) return;
+    btn.disabled = true;
 
-    box.className = 'result poster-card';
-    box.innerHTML = `
-      <div class="poster-placeholder">${x.kind === 'movie' ? '🎬' : '📺'}</div>
-      <div class="type">${x.kind === 'movie' ? 'FILM' : 'SERIE'}</div>
-      <h2>${escapeHtml(x.title)}</h2>
-      <div class="meta">${escapeHtml(x.provider)}${x.year ? ' · ' + x.year : ''}${x.rating != null ? ' · ⭐ ' + Number(x.rating).toFixed(1) : ''}${x.runtime ? ' · ' + x.runtime + ' min' : ''}</div>
-      ${x.genres ? `<div class="genres">${escapeHtml(x.genres)}</div>` : ''}
-      ${x.plot ? `<p>${escapeHtml(x.plot)}</p>` : '<p>Keine Beschreibung in den vorhandenen Metadaten.</p>'}
-      <button onclick="pick('${x.kind}')">🔀 Noch eine Empfehlung</button>`;
-  } catch {
-    document.getElementById('result').className = 'result';
-    document.getElementById('result').innerHTML = '<h2>⚠️ Fehler</h2><p>Die Empfehlung konnte gerade nicht geladen werden.</p>';
-  } finally {
-    if (button) button.disabled = false;
-  }
+    const kind = document.getElementById('kind-filter')?.value || null;
+    const provider = document.getElementById('provider-filter')?.value || null;
+    const resultBox = document.getElementById('result');
+    if (!resultBox) return;
+
+    resultBox.className = 'result';
+    resultBox.innerHTML = '<p>Lade Empfehlung...</p>';
+
+    const exclude = recent.join('\n');
+    const url = new URL('/api/random', window.location.origin);
+    if (kind) url.searchParams.set('kind', kind);
+    if (provider) url.searchParams.set('provider', provider);
+    if (exclude) url.searchParams.set('exclude', exclude);
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data.success || !data.item) {
+            resultBox.className = 'result';
+            resultBox.innerHTML = `
+                <h2>😕 Nichts gefunden</h2>
+                <p>${escapeHtml(data.message)}</p>
+            `;
+            return;
+        }
+
+        const x = data.item;
+        const key = `${x.kind}|${x.title}|${x.year || ''}|${x.provider || ''}`;
+        recent.unshift(key);
+        while (recent.length > RECENT_LIMIT) recent.pop();
+
+        resultBox.className = 'result poster-card';
+        resultBox.innerHTML = `
+            <div class="type">${x.kind === 'movie' ? '🎬' : '📺'} ${x.kind === 'movie' ? 'FILM' : 'SERIE'}</div>
+            <h2>${escapeHtml(x.title)}${x.year ? ` · ${x.year}` : ''}${x.rating != null ? ` · ⭐ ${Number(x.rating).toFixed(1)}` : ''}</h2>
+            <div class="meta">${escapeHtml(x.provider)}${x.runtime ? ` · ${x.runtime} min` : ''}</div>
+            ${x.genres ? `<div class="genres">${escapeHtml(x.genres)}</div>` : ''}
+            <p>${x.plot ? escapeHtml(x.plot) : 'Keine Beschreibung in den vorhandenen Metadaten.'}</p>
+            <button class="secondary" onclick="location.reload()">🔄 Noch eine Empfehlung</button>
+        `;
+    } catch (err) {
+        resultBox.className = 'result';
+        resultBox.innerHTML = `
+            <h2>⚠️ Fehler</h2>
+            <p>Die Empfehlung konnte gerade nicht geladen werden.</p>
+        `;
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/'/g, '&#39;')
+        .replace(/"/g, '&quot;');
 }
 
-loadStats();
+document.addEventListener('DOMContentLoaded', () => {
+    loadStats();
+
+    const btn = document.getElementById('spin-btn');
+    if (btn) {
+        btn.addEventListener('click', getRandomMedia);
+    }
+});
 </script>
 {% endblock %}
