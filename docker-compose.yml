@@ -4,15 +4,19 @@ services:
   media-roulette:
     build: .
     container_name: media-roulette
+    network_mode: "bridge"  # Nutzt Standard UnRAID Docker Network
     ports:
       - "8000:8000"
     environment:
       MOVIES_DIR: /data/movies
       SERIES_DIR: /data/series
       DATABASE_PATH: /state/media-roulette.db
+      TZ: Europe/Berlin  # Zeitzone für Logs
     volumes:
-      - /mnt/data:/data:ro
-      - ./state:/state
+      # WICHTIG: Deine tatsächlichen UnRAID-Pfade!
+      - /mnt/user/data/media/movies:/data/movies:ro
+      - /mnt/user/data/media/tv:/data/series:ro
+      - /mnt/user/appdata/media-roulette/state:/state
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -20,7 +24,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-networks:
-  default:
-    name: media-roulette-network
