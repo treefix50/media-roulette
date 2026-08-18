@@ -1,17 +1,30 @@
-# Media Roulette Dockerfile
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# Abhängigkeiten installieren
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Anwendung kopieren
+COPY requirements.txt .
+
+RUN pip install \
+        --no-cache-dir \
+        -r requirements.txt \
+    && rm -rf /root/.cache/pip
+
 COPY app/ ./app/
 
-# Exponiere Port
+RUN mkdir -p /state
+
 EXPOSE 8000
 
-# Anwendung starten
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD [
+    "uvicorn",
+    "app.main:app",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "8000",
+    "--proxy-headers"
+]
