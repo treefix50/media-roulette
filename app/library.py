@@ -12,6 +12,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# ==============================================================
+# KONFIGURATION
+# ==============================================================
+
 VIDEO_EXTENSIONS = {
     ".mkv",
     ".mp4",
@@ -22,6 +26,38 @@ VIDEO_EXTENSIONS = {
     ".webm",
     ".ts",
     ".m2ts",
+}
+
+
+# Feste Providerliste.
+#
+# Diese Namen müssen exakt den direkten Provider-Ordnern unter
+# /movies bzw. /tv entsprechen.
+#
+# Wichtig:
+# Es gibt bewusst KEINE automatische Erkennung beliebiger
+# Ordner als Provider.
+#
+# Beispiel:
+#
+#   /tv/max/...
+#   /tv/netflix/...
+#
+# werden verarbeitet.
+#
+#   /tv/hbo/...
+#   /tv/primevideo/...
+#
+# werden ignoriert, solange sie hier nicht eingetragen sind.
+PROVIDERS = {
+    "max",
+    "peacock",
+    "paramount",
+    "appletv",
+    "appletvplus",
+    "disney",
+    "netflix",
+    "sky",
 }
 
 
@@ -53,7 +89,11 @@ def _clean(value: str | None) -> str | None:
     if value is None:
         return None
 
-    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(
+        r"\s+",
+        " ",
+        value,
+    ).strip()
 
     return value or None
 
@@ -88,8 +128,8 @@ def parse_nfo(
     """
     Liest Metadaten aus einer NFO.
 
-    Eine fehlerhafte NFO darf niemals den kompletten
-    Bibliotheksscan abbrechen.
+    Eine fehlerhafte oder unlesbare NFO darf niemals den
+    kompletten Bibliotheksscan abbrechen.
     """
 
     if path is None:
@@ -135,6 +175,10 @@ def parse_nfo(
         if value:
             data[field] = value
 
+    # ----------------------------------------------------------
+    # Genres
+    # ----------------------------------------------------------
+
     genres: list[str] = []
 
     for node in root.findall("genre"):
@@ -148,9 +192,9 @@ def parse_nfo(
             dict.fromkeys(genres)
         )
 
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
     # Poster
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
 
     poster = None
 
@@ -182,15 +226,16 @@ def parse_nfo(
     if poster:
         data["poster"] = poster
 
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
     # Rating
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
 
     rating = _parse_number(
         data.get("rating")
     )
 
     if rating is not None:
+        # Manche NFOs verwenden 0-5 statt 0-10.
         if 0 < rating <= 5:
             rating *= 2
 
@@ -201,9 +246,9 @@ def parse_nfo(
 
     data["rating"] = rating
 
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
     # Runtime
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
 
     runtime = _parse_number(
         data.get("runtime")
@@ -214,6 +259,7 @@ def parse_nfo(
             round(runtime)
         )
 
+        # Werte unter 100 werden als Stunden interpretiert.
         if 0 < runtime < 100:
             runtime *= 60
 
@@ -224,9 +270,9 @@ def parse_nfo(
 
     data["runtime"] = runtime
 
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
     # Year
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
 
     year = data.get("year")
 
@@ -279,7 +325,9 @@ def parse_name(
     )
 
     if match:
-        text = text[:match.start()].strip(
+        text = text[
+            :match.start()
+        ].strip(
             " -()."
         )
 
@@ -313,8 +361,31 @@ class Library:
 
         /tv/PROVIDER/SERIE/
 
-    Bei Serien ist ausschließlich der SERIEN-Ordner ein
+    Erlaubte Provider:
+
+        max
+        paramount
+        appletv
+        appletvplus
+        disney
+        netflix
+        sky
+
+    Bei Serien ist ausschließlich der Serienordner ein
     Media-Roulette-Eintrag.
+
+    Beispiel:
+
+        /tv/max/Power Book IV Force/
+            Season 01/
+            Season 02/
+            Season 03/
+
+    ergibt genau EINEN Eintrag:
+
+        provider = max
+        title    = Power Book IV Force
+        kind     = series
 
     Season- und Episode-Ordner werden niemals als eigene
     Media-Einträge angelegt.
@@ -339,6 +410,114 @@ class Library:
         self._scan_lock = threading.Lock()
 
         self._init_db()
+
+    # ==============================================================
+    # PROVIDERS
+    # ==============================================================
+
+    @staticmethod
+    def _normalize_provider(
+        provider: str | None,
+    ) -> str | None:
+        """
+        Normalisiert einen Providernamen.
+
+        Provider werden intern immer lowercase gespeichert.
+
+        Dadurch werden beispielsweise:
+
+            MAX
+            Max
+            max
+
+        gleich behandelt.
+
+        Die feste Providerliste bleibt trotzdem strikt bestehen.
+        """
+
+        if provider is None:
+            return None
+
+        normalized = provider.strip().casefold()
+
+        if not normalized:
+            return None
+
+        if normalized not in PROVIDERS:
+            return None
+
+        return normalized
+
+    @staticmethod
+    def _provider_dirs(
+        root_dir: Path,
+    ) -> list[tuple[str, Path]] | None:
+        """
+        Liefert ausschließlich die erlaubten Providerordner.
+
+        Alle anderen direkten Unterordner werden ignoriert.
+
+        Beispiel:
+
+            /tv/max
+            /tv/netflix
+            /tv/hbo
+
+        liefert nur:
+
+            max
+            netflix
+        """
+
+        try:
+            if not root_dir.exists():
+                return None
+
+            if not root_dir.is_dir():
+                return None
+
+            result: list[
+                tuple[str, Path]
+            ] = []
+
+            for child in root_dir.iterdir():
+
+                if not child.is_dir():
+                    continue
+
+                provider = Library._normalize_provider(
+                    child.name
+                )
+
+                if provider is None:
+                    logger.debug(
+                        "Ignoring unsupported provider directory: %s",
+                        child,
+                    )
+                    continue
+
+                result.append(
+                    (
+                        provider,
+                        child,
+                    )
+                )
+
+            result.sort(
+                key=lambda item:
+                    item[0].casefold()
+            )
+
+            return result
+
+        except OSError:
+
+            logger.exception(
+                "Unable to read provider directory: %s",
+                root_dir,
+            )
+
+            return None
 
     # ==============================================================
     # DATABASE
@@ -554,10 +733,12 @@ class Library:
         """
         Sucht deterministisch nach einer Videodatei.
 
-        Wichtig:
-        Für Serien dient diese Datei NICHT als Roulette-Eintrag.
-        Sie wird lediglich verwendet, um festzustellen, ob die
-        Serie tatsächlich Medieninhalt besitzt.
+        Bei Serien wird diese Datei ausschließlich verwendet,
+        um festzustellen, ob die Serie tatsächlich Videoinhalt
+        besitzt.
+
+        Die Episode selbst wird NICHT als Media-Roulette-Eintrag
+        verwendet.
         """
 
         try:
@@ -645,12 +826,24 @@ class Library:
         """
         Erstellt einen Media-Datensatz.
 
-        Für Filme ist path die Videodatei.
+        Film:
+            path = tatsächliche Videodatei
 
-        Für Serien ist path DER SERIENORDNER.
-        Dadurch repräsentiert die Datenbank tatsächlich die Serie
-        und nicht irgendeine zufällig ausgewählte Episode.
+        Serie:
+            path = Serienordner
+
+        Dadurch bleiben Serien unabhängig von ihren Seasons
+        und Episoden genau ein Roulette-Eintrag.
         """
+
+        normalized_provider = (
+            self._normalize_provider(
+                provider
+            )
+        )
+
+        if normalized_provider is None:
+            return None
 
         first_video = (
             self._find_first_video(
@@ -687,63 +880,62 @@ class Library:
             )
         )
 
-        # ----------------------------------------------------------
-        # Unterschied Film / Serie:
-        #
-        # Film -> tatsächliche Videodatei
-        # Serie -> Serienordner
-        #
-        # Dadurch kann Season 01/02/03 niemals zu eigenen
-        # Roulette-Einträgen werden.
-        # ----------------------------------------------------------
-
         if kind == "series":
             media_path = media_dir
         else:
             media_path = first_video
 
+        try:
+            resolved_media_path = (
+                media_path.resolve()
+            )
+        except OSError:
+            return None
+
+        try:
+            resolved_nfo_path = (
+                nfo.resolve()
+                if nfo
+                else None
+            )
+        except OSError:
+            resolved_nfo_path = None
+
+        try:
+            resolved_poster_path = (
+                poster_path.resolve()
+                if poster_path
+                else None
+            )
+        except OSError:
+            resolved_poster_path = None
+
         return {
             "kind": kind,
-            "provider": provider,
+            "provider": normalized_provider,
             "title": (
                 title
                 or media_dir.name
             ),
             "year": year,
-            "plot": data.get(
-                "plot"
-            ),
-            "genres": data.get(
-                "genres"
-            ),
-            "rating": data.get(
-                "rating"
-            ),
-            "runtime": data.get(
-                "runtime"
-            ),
+            "plot": data.get("plot"),
+            "genres": data.get("genres"),
+            "rating": data.get("rating"),
+            "runtime": data.get("runtime"),
             "path": str(
-                media_path.resolve()
+                resolved_media_path
             ),
             "nfo_path": (
-                str(nfo.resolve())
-                if nfo
+                str(resolved_nfo_path)
+                if resolved_nfo_path
                 else None
             ),
-            "tmdbid": data.get(
-                "tmdbid"
-            ),
-            "imdbid": data.get(
-                "imdbid"
-            ),
-            "poster": data.get(
-                "poster"
-            ),
+            "tmdbid": data.get("tmdbid"),
+            "imdbid": data.get("imdbid"),
+            "poster": data.get("poster"),
             "poster_path": (
-                str(
-                    poster_path.resolve()
-                )
-                if poster_path
+                str(resolved_poster_path)
+                if resolved_poster_path
                 else None
             ),
         }
@@ -756,14 +948,16 @@ class Library:
         self,
         root_dir: Path,
     ) -> list[dict[str, Any]] | None:
-
         """
         Filme:
 
             /movies/provider/movie/
+
+        Es werden ausschließlich die fest definierten Provider
+        verarbeitet.
         """
 
-        provider_dirs = self._iter_dirs(
+        provider_dirs = self._provider_dirs(
             root_dir
         )
 
@@ -772,21 +966,23 @@ class Library:
 
         items: list[dict[str, Any]] = []
 
-        for provider_dir in provider_dirs:
-
-            provider = (
-                provider_dir.name.strip()
-            )
-
-            if not provider:
-                continue
+        for provider, provider_dir in provider_dirs:
 
             movie_dirs = self._iter_dirs(
                 provider_dir
             )
 
             if movie_dirs is None:
+                logger.warning(
+                    "Unable to read movie provider: %s",
+                    provider_dir,
+                )
                 continue
+
+            logger.debug(
+                "Scanning movie provider: %s",
+                provider,
+            )
 
             for movie_dir in movie_dirs:
 
@@ -815,32 +1011,30 @@ class Library:
         self,
         root_dir: Path,
     ) -> list[dict[str, Any]] | None:
-
         """
-        Serien werden AUSSCHLIESSLICH so gelesen:
+        Serien:
 
-            /tv/
-                provider/
-                    series/
-                        Season 01/
-                        Season 02/
-                        Season 03/
+            /tv/provider/series/
 
         Beispiel:
 
             /tv/max/Power Book IV Force/
+                Season 01/
+                Season 02/
+                Season 03/
 
-        ergibt genau EINEN Datensatz:
+        ergibt exakt EINEN Datensatz:
 
             kind     = series
             provider = max
             title    = Power Book IV Force
 
-        Season- und Episode-Ordner werden niemals als eigene
-        Einträge verarbeitet.
+        Seasons und Episoden werden ausschließlich rekursiv
+        durchsucht, um festzustellen, ob die Serie Videoinhalt
+        besitzt.
         """
 
-        provider_dirs = self._iter_dirs(
+        provider_dirs = self._provider_dirs(
             root_dir
         )
 
@@ -849,20 +1043,17 @@ class Library:
 
         items: list[dict[str, Any]] = []
 
-        for provider_dir in provider_dirs:
-
-            provider = (
-                provider_dir.name.strip()
-            )
-
-            if not provider:
-                continue
+        for provider, provider_dir in provider_dirs:
 
             series_dirs = self._iter_dirs(
                 provider_dir
             )
 
             if series_dirs is None:
+                logger.warning(
+                    "Unable to read series provider: %s",
+                    provider_dir,
+                )
                 continue
 
             logger.debug(
@@ -1033,16 +1224,6 @@ class Library:
                 ),
             )
 
-        # ----------------------------------------------------------
-        # Filme:
-        #   path = /movies/provider/movie/file.mkv
-        #
-        # Serien:
-        #   path = /tv/provider/series
-        #
-        # In beiden Fällen reicht die Root-Präfixprüfung.
-        # ----------------------------------------------------------
-
         db.execute(
             """
             DELETE FROM media
@@ -1165,8 +1346,13 @@ class Library:
 
                 return int(total)
 
-        finally:
+        except Exception:
+            logger.exception(
+                "Library scan failed."
+            )
+            raise
 
+        finally:
             self._scan_lock.release()
 
     # ==============================================================
@@ -1188,7 +1374,17 @@ class Library:
 
         params: list[Any] = []
 
-        if kind in {
+        # ----------------------------------------------------------
+        # Kind
+        # ----------------------------------------------------------
+
+        normalized_kind = (
+            kind.strip().lower()
+            if kind
+            else ""
+        )
+
+        if normalized_kind in {
             "movie",
             "series",
         }:
@@ -1197,19 +1393,28 @@ class Library:
                 AND kind = ?
             """
 
-            params.append(kind)
+            params.append(
+                normalized_kind
+            )
+
+        # ----------------------------------------------------------
+        # Provider
+        # ----------------------------------------------------------
 
         if provider:
 
             normalized_provider = (
-                provider.strip()
+                provider.strip().casefold()
             )
 
-            if (
-                normalized_provider
-                and normalized_provider.lower()
-                != "alle"
-            ):
+            # "alle" bedeutet alle erlaubten Provider.
+            if normalized_provider != "alle":
+
+                if (
+                    normalized_provider
+                    not in PROVIDERS
+                ):
+                    return None
 
                 query += """
                     AND provider = ?
@@ -1219,16 +1424,28 @@ class Library:
                     normalized_provider
                 )
 
-        excluded = list(
-            dict.fromkeys(
-                title.strip()
-                for title in (
-                    exclude_titles or []
+        # ----------------------------------------------------------
+        # Exclude titles
+        # ----------------------------------------------------------
+
+        excluded: list[str] = []
+
+        for title in (
+            exclude_titles or []
+        ):
+
+            if not title:
+                continue
+
+            cleaned = title.strip()
+
+            if not cleaned:
+                continue
+
+            if cleaned not in excluded:
+                excluded.append(
+                    cleaned
                 )
-                if title
-                and title.strip()
-            )
-        )
 
         if excluded:
 
@@ -1245,6 +1462,10 @@ class Library:
             params.extend(
                 excluded
             )
+
+        # ----------------------------------------------------------
+        # Roulette
+        # ----------------------------------------------------------
 
         query += """
             ORDER BY RANDOM()
