@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
+
 <style>
 :root {
     --bg-primary: #0f0f1a;
@@ -11,16 +12,35 @@
     --text-primary: #e0e0e0;
     --text-secondary: #a0a0a0;
     --border: #2a2a4e;
-    --success: #00d4aa;
-    --warning: #ffae00;
+    --error: #ff5050;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+}
 
 body {
-    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+    background:
+        linear-gradient(
+            135deg,
+            var(--bg-primary) 0%,
+            var(--bg-secondary) 100%
+        );
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        Arial,
+        sans-serif;
     min-height: 100vh;
     line-height: 1.6;
 }
@@ -33,13 +53,18 @@ body {
 
 header {
     text-align: center;
-    margin-bottom: 50px;
+    margin-bottom: 40px;
 }
 
 h1 {
     font-size: clamp(2rem, 5vw, 3.5rem);
     margin-bottom: 10px;
-    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+    background:
+        linear-gradient(
+            90deg,
+            var(--accent),
+            var(--accent-hover)
+        );
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -63,6 +88,7 @@ h1 {
 }
 
 .stat-item {
+    min-width: 100px;
     text-align: center;
 }
 
@@ -85,7 +111,8 @@ h1 {
     margin-bottom: 30px;
 }
 
-select, button {
+select,
+button {
     padding: 14px 24px;
     font-size: 1rem;
     border-radius: 8px;
@@ -93,16 +120,30 @@ select, button {
     background: var(--bg-card);
     color: var(--text-primary);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition:
+        background 0.2s ease,
+        border-color 0.2s ease,
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
 }
 
-select:hover, button:hover:not(:disabled) {
+select:hover,
+button:hover:not(:disabled) {
     background: var(--bg-secondary);
     border-color: var(--accent);
 }
 
+select:focus,
+button:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow:
+        0 0 0 3px
+        rgba(109, 74, 255, 0.25);
+}
+
 button:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
 }
 
@@ -110,13 +151,12 @@ button:disabled {
     background: var(--accent);
     border-color: var(--accent);
     font-weight: bold;
-    min-width: 200px;
+    min-width: 220px;
 }
 
 #spin-btn:hover:not(:disabled) {
     background: var(--accent-hover);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(109, 76, 170, 0.4);
+    transform: translateY(-1px);
 }
 
 .result-container {
@@ -128,23 +168,27 @@ button:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 300px;
+    min-height: 300px;
     color: var(--text-secondary);
-    font-size: 1.2rem;
+    font-size: 1.1rem;
+    text-align: center;
+    gap: 15px;
 }
 
 .spinner {
     width: 40px;
     height: 40px;
+    flex: 0 0 auto;
     border: 4px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 1s linear infinite;
-    margin-right: 15px;
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .poster-card {
@@ -154,15 +198,15 @@ button:disabled {
     overflow: hidden;
     display: grid;
     grid-template-columns: 300px 1fr;
-    gap: 0;
-    animation: slideUp 0.4s ease;
+    animation: slideUp 0.35s ease;
 }
 
 @keyframes slideUp {
     from {
         opacity: 0;
-        transform: translateY(30px);
+        transform: translateY(20px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -178,6 +222,7 @@ button:disabled {
 .poster-image img {
     width: 100%;
     height: 100%;
+    min-height: 450px;
     object-fit: cover;
     display: block;
 }
@@ -185,6 +230,7 @@ button:disabled {
 .poster-placeholder {
     width: 100%;
     height: 100%;
+    min-height: 450px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -202,6 +248,7 @@ button:disabled {
     align-items: flex-start;
     gap: 15px;
     margin-bottom: 20px;
+    flex-wrap: wrap;
 }
 
 .media-type {
@@ -210,10 +257,11 @@ button:disabled {
     background: var(--accent);
     color: #fff;
     border-radius: 20px;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;
+    white-space: nowrap;
 }
 
 .media-title {
@@ -221,17 +269,20 @@ button:disabled {
     font-weight: bold;
     color: var(--text-primary);
     margin: 0;
-    flex: 1;
+    flex: 1 1 250px;
+    min-width: 0;
 }
 
 .media-year {
     color: var(--text-secondary);
     font-size: 1.2rem;
+    white-space: nowrap;
 }
 
 .meta-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns:
+        repeat(auto-fit, minmax(150px, 1fr));
     gap: 15px;
     margin-bottom: 20px;
     padding: 20px;
@@ -251,9 +302,10 @@ button:disabled {
 }
 
 .meta-value {
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     font-weight: bold;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
 }
 
 .genres {
@@ -277,8 +329,9 @@ button:disabled {
     line-height: 1.8;
     color: var(--text-secondary);
     margin-bottom: 20px;
-    max-height: 150px;
+    max-height: 180px;
     overflow-y: auto;
+    white-space: pre-line;
 }
 
 .action-buttons {
@@ -321,39 +374,47 @@ button:disabled {
 }
 
 .error-state {
-    background: rgba(255, 80, 80, 0.1);
-    border: 1px solid rgba(255, 80, 80, 0.3);
+    background:
+        rgba(255, 80, 80, 0.08);
+    border-color:
+        rgba(255, 80, 80, 0.3);
 }
 
 .error-icon {
-    color: #ff5050;
+    color: var(--error);
 }
 
-/* Responsive Design */
 @media (max-width: 900px) {
     .poster-card {
         grid-template-columns: 1fr;
     }
-    
+
     .poster-image {
         min-height: 350px;
         max-width: 400px;
+        width: 100%;
         margin: 0 auto;
     }
-    
+
+    .poster-image img,
+    .poster-placeholder {
+        min-height: 350px;
+    }
+
     .media-info {
         padding: 20px;
     }
-    
+
     .media-title {
         font-size: 1.5rem;
     }
-    
+
     .controls {
         flex-direction: column;
     }
-    
-    select, button {
+
+    select,
+    button {
         width: 100%;
     }
 }
@@ -362,37 +423,68 @@ button:disabled {
     .container {
         padding: 20px 15px;
     }
-    
+
     h1 {
         font-size: 1.8rem;
     }
-    
+
+    .subtitle {
+        font-size: 1rem;
+    }
+
     .stats-bar {
         gap: 15px;
         padding: 15px;
     }
-    
+
     .stat-value {
         font-size: 1.5rem;
     }
-    
+
+    .stat-item {
+        min-width: 70px;
+    }
+
+    .media-info {
+        padding: 18px;
+    }
+
     .meta-grid {
         grid-template-columns: 1fr 1fr;
+        padding: 15px;
     }
-    
+
     .action-buttons {
         flex-direction: column;
     }
-    
-    .btn-secondary, #spin-btn {
+
+    .action-buttons button {
         width: 100%;
+    }
+
+    .media-year {
+        font-size: 1rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
     }
 }
 </style>
 
 <header>
     <h1>😎 Media Roulette</h1>
-    <p class="subtitle">Finde dein nächstes Lieblingsmedium – zufällig, lokal, ohne Entscheidungsmüdigkeit</p>
+
+    <p class="subtitle">
+        Finde dein nächstes Lieblingsmedium –
+        zufällig, lokal, ohne Entscheidungsmüdigkeit
+    </p>
 </header>
 
 <div class="stats-bar" id="stats">
@@ -400,14 +492,17 @@ button:disabled {
         <div class="stat-value" id="total-count">-</div>
         <div class="stat-label">Medien</div>
     </div>
+
     <div class="stat-item">
         <div class="stat-value" id="movies-count">-</div>
         <div class="stat-label">Filme</div>
     </div>
+
     <div class="stat-item">
         <div class="stat-value" id="series-count">-</div>
         <div class="stat-label">Serien</div>
     </div>
+
     <div class="stat-item">
         <div class="stat-value" id="providers-count">-</div>
         <div class="stat-label">Anbieter</div>
@@ -415,210 +510,787 @@ button:disabled {
 </div>
 
 <div class="controls">
-    <select id="kind-filter">
+    <select id="kind-filter" aria-label="Medientyp">
         <option value="">Alle Medien</option>
         <option value="movie">🎬 Nur Filme</option>
         <option value="series">📺 Nur Serien</option>
     </select>
-    <select id="provider-filter">
+
+    <select
+        id="provider-filter"
+        aria-label="Anbieter"
+    >
         <option value="">Alle Anbieter</option>
     </select>
-    <button id="spin-btn">🔀 Zufallsempfehlung</button>
+
+    <button
+        id="spin-btn"
+        type="button"
+    >
+        🔀 Zufallsempfehlung
+    </button>
 </div>
 
-<div class="result-container" id="result">
+<div
+    class="result-container"
+    id="result"
+    aria-live="polite"
+>
     <div class="loading">
         <div class="spinner"></div>
-        <span>Klicke auf "Zufallsempfehlung" um zu starten</span>
+
+        <span>
+            Klicke auf "Zufallsempfehlung",
+            um zu starten
+        </span>
     </div>
 </div>
 
 <script>
+"use strict";
+
 const RECENT_LIMIT = 10;
+const REQUEST_TIMEOUT_MS = 15000;
+
 const recent = [];
 
 function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/'/g, '&#39;')
-        .replace(/"/g, '&quot;');
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/'/g, "&#39;")
+        .replace(/"/g, "&quot;");
+}
+
+function createAbortSignal(timeoutMs) {
+    const controller = new AbortController();
+
+    const timeout = window.setTimeout(
+        () => controller.abort(),
+        timeoutMs
+    );
+
+    return {
+        signal: controller.signal,
+        cleanup: () => window.clearTimeout(timeout)
+    };
+}
+
+async function fetchJson(url, options = {}) {
+    const request = createAbortSignal(
+        REQUEST_TIMEOUT_MS
+    );
+
+    try {
+        const response = await fetch(
+            url,
+            {
+                ...options,
+                signal: request.signal,
+                headers: {
+                    "Accept": "application/json",
+                    ...(options.headers || {})
+                }
+            }
+        );
+
+        let data = null;
+
+        try {
+            data = await response.json();
+        } catch {
+            data = null;
+        }
+
+        if (!response.ok) {
+            const message =
+                data?.detail ||
+                data?.message ||
+                `HTTP ${response.status}`;
+
+            throw new Error(message);
+        }
+
+        return data;
+    } finally {
+        request.cleanup();
+    }
 }
 
 function getPosterUrl(item) {
-    // TMDB Poster URL aus NFO generieren
-    if (item.tmdbid) {
-        const kindPrefix = item.kind === 'movie' ? 'movie' : 'tv';
-        return `https://image.tmdb.org/t/p/w500/${kindPrefix}/${item.tmdbid}.jpg`;
+    if (
+        item &&
+        typeof item.poster_url === "string" &&
+        item.poster_url.trim()
+    ) {
+        return item.poster_url;
     }
-    // Lokales Poster (falls vorhanden)
-    if (item.local_poster) {
-        return item.local_poster;
-    }
-    // Fallback auf Platzhalter
+
     return null;
+}
+
+function posterPlaceholder(item) {
+    const icon =
+        item?.kind === "movie"
+            ? "🎬"
+            : "📺";
+
+    return `
+        <div class="poster-placeholder">
+            ${icon}
+        </div>
+    `;
 }
 
 function renderPoster(item) {
     const posterSrc = getPosterUrl(item);
-    
-    if (posterSrc) {
-        return `<div class="poster-image"><img src="${escapeHtml(posterSrc)}" alt="${escapeHtml(item.title)}" onerror="this.parentElement.innerHTML='<div class=\\'poster-placeholder\\'>🎬</div>'"></div>`;
-    } else {
-        const icon = item.kind === 'movie' ? '🎬' : '📺';
-        return `<div class="poster-image"><div class="poster-placeholder">${icon}</div></div>`;
+
+    if (!posterSrc) {
+        return `
+            <div class="poster-image">
+                ${posterPlaceholder(item)}
+            </div>
+        `;
+    }
+
+    return `
+        <div class="poster-image">
+            <img
+                src="${escapeHtml(posterSrc)}"
+                alt="${escapeHtml(item.title)}"
+                loading="eager"
+                decoding="async"
+                data-fallback-kind="${escapeHtml(item.kind)}"
+            >
+        </div>
+    `;
+}
+
+function attachPosterFallbacks() {
+    document
+        .querySelectorAll(".poster-image img")
+        .forEach((image) => {
+            image.addEventListener(
+                "error",
+                () => {
+                    const kind =
+                        image.dataset.fallbackKind;
+
+                    const item = {
+                        kind
+                    };
+
+                    image.parentElement.innerHTML =
+                        posterPlaceholder(item);
+                },
+                { once: true }
+            );
+        });
+}
+
+function formatProvider(provider) {
+    if (!provider) {
+        return "Unbekannt";
+    }
+
+    return String(provider)
+        .charAt(0)
+        .toUpperCase() +
+        String(provider).slice(1);
+}
+
+function renderStats(stats) {
+    const safeStats = stats || {};
+
+    document.getElementById(
+        "total-count"
+    ).textContent =
+        Number(safeStats.total || 0);
+
+    document.getElementById(
+        "movies-count"
+    ).textContent =
+        Number(safeStats.movies || 0);
+
+    document.getElementById(
+        "series-count"
+    ).textContent =
+        Number(safeStats.series || 0);
+
+    const providers =
+        Array.isArray(safeStats.providers)
+            ? safeStats.providers
+            : [];
+
+    document.getElementById(
+        "providers-count"
+    ).textContent = providers.length;
+
+    const providerSelect =
+        document.getElementById(
+            "provider-filter"
+        );
+
+    const currentValue =
+        providerSelect.value;
+
+    providerSelect.innerHTML = "";
+
+    const allOption =
+        document.createElement("option");
+
+    allOption.value = "";
+    allOption.textContent =
+        "Alle Anbieter";
+
+    providerSelect.appendChild(
+        allOption
+    );
+
+    providers.forEach((provider) => {
+        const option =
+            document.createElement("option");
+
+        option.value = provider;
+        option.textContent =
+            formatProvider(provider);
+
+        providerSelect.appendChild(
+            option
+        );
+    });
+
+    if (
+        providers.includes(currentValue)
+    ) {
+        providerSelect.value =
+            currentValue;
     }
 }
 
 async function loadStats() {
+    const statsBox =
+        document.getElementById("stats");
+
     try {
-        const res = await fetch('/api/stats');
-        const stats = await res.json();
-        
-        document.getElementById('total-count').textContent = stats.total;
-        document.getElementById('movies-count').textContent = stats.movies;
-        document.getElementById('series-count').textContent = stats.series;
-        document.getElementById('providers-count').textContent = stats.providers.length;
-        
-        // Provider-Dropdown auffüllen
-        const providerSelect = document.getElementById('provider-filter');
-        if (Array.isArray(stats.providers)) {
-            providerSelect.innerHTML = '<option value="">Alle Anbieter</option>';
-            stats.providers.forEach(provider => {
-                const opt = document.createElement('option');
-                opt.value = provider;
-                opt.textContent = provider.charAt(0).toUpperCase() + provider.slice(1);
-                providerSelect.appendChild(opt);
-            });
+        const stats =
+            await fetchJson("/api/stats");
+
+        renderStats(stats);
+    } catch (error) {
+        console.error(
+            "Stats loading failed:",
+            error
+        );
+
+        document.getElementById(
+            "total-count"
+        ).textContent = "?";
+
+        document.getElementById(
+            "movies-count"
+        ).textContent = "?";
+
+        document.getElementById(
+            "series-count"
+        ).textContent = "?";
+
+        document.getElementById(
+            "providers-count"
+        ).textContent = "?";
+
+        if (statsBox) {
+            statsBox.setAttribute(
+                "data-error",
+                "true"
+            );
         }
-    } catch (err) {
-        console.error('Stats loading failed:', err);
-        document.querySelector('.stats-bar').innerHTML = '<div class="empty-message">Statistiken nicht verfügbar</div>';
     }
+}
+
+function buildRandomUrl() {
+    const kind =
+        document.getElementById(
+            "kind-filter"
+        )?.value || "";
+
+    const provider =
+        document.getElementById(
+            "provider-filter"
+        )?.value || "";
+
+    const url =
+        new URL(
+            "/api/random",
+            window.location.origin
+        );
+
+    if (kind) {
+        url.searchParams.set(
+            "kind",
+            kind
+        );
+    }
+
+    if (provider) {
+        url.searchParams.set(
+            "provider",
+            provider
+        );
+    }
+
+    // Wichtig:
+    // Das Backend erwartet reine Titel,
+    // keine zusammengesetzten Frontend-Keys.
+    const excludedTitles = [
+        ...new Set(recent)
+    ];
+
+    if (excludedTitles.length) {
+        url.searchParams.set(
+            "exclude",
+            excludedTitles.join("\n")
+        );
+    }
+
+    return url;
+}
+
+function addRecentTitle(title) {
+    if (!title) {
+        return;
+    }
+
+    const normalized =
+        String(title).trim();
+
+    if (!normalized) {
+        return;
+    }
+
+    const existingIndex =
+        recent.indexOf(normalized);
+
+    if (existingIndex !== -1) {
+        recent.splice(
+            existingIndex,
+            1
+        );
+    }
+
+    recent.unshift(
+        normalized
+    );
+
+    while (
+        recent.length > RECENT_LIMIT
+    ) {
+        recent.pop();
+    }
+}
+
+function renderResult(item) {
+    const resultBox =
+        document.getElementById("result");
+
+    const rating =
+        Number.isFinite(
+            Number(item.rating)
+        )
+            ? Number(item.rating)
+            : null;
+
+    const runtime =
+        Number.isFinite(
+            Number(item.runtime)
+        )
+            ? Number(item.runtime)
+            : null;
+
+    const genres =
+        typeof item.genres === "string"
+            ? item.genres
+                .split(",")
+                .map(
+                    (genre) =>
+                        genre.trim()
+                )
+                .filter(Boolean)
+            : [];
+
+    const type =
+        item.kind === "movie"
+            ? "Film"
+            : "Serie";
+
+    const provider =
+        formatProvider(
+            item.provider
+        );
+
+    resultBox.innerHTML = `
+        <div class="poster-card">
+            ${renderPoster(item)}
+
+            <div class="media-info">
+                <div class="media-header">
+                    <span class="media-type">
+                        ${type}
+                    </span>
+
+                    <h2 class="media-title">
+                        ${escapeHtml(
+                            item.title
+                        )}
+                    </h2>
+
+                    ${
+                        item.year
+                            ? `
+                                <span
+                                    class="media-year"
+                                >
+                                    (${escapeHtml(
+                                        item.year
+                                    )})
+                                </span>
+                            `
+                            : ""
+                    }
+                </div>
+
+                <div class="meta-grid">
+                    <div class="meta-item">
+                        <span class="meta-label">
+                            Anbieter
+                        </span>
+
+                        <span class="meta-value">
+                            ${escapeHtml(
+                                provider
+                            )}
+                        </span>
+                    </div>
+
+                    ${
+                        rating !== null
+                            ? `
+                                <div class="meta-item">
+                                    <span
+                                        class="meta-label"
+                                    >
+                                        Bewertung
+                                    </span>
+
+                                    <span
+                                        class="meta-value"
+                                    >
+                                        ⭐
+                                        ${rating.toFixed(
+                                            1
+                                        )}
+                                    </span>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                    ${
+                        runtime !== null
+                            ? `
+                                <div class="meta-item">
+                                    <span
+                                        class="meta-label"
+                                    >
+                                        Laufzeit
+                                    </span>
+
+                                    <span
+                                        class="meta-value"
+                                    >
+                                        ${Math.round(
+                                            runtime
+                                        )} Min.
+                                    </span>
+                                </div>
+                            `
+                            : ""
+                    }
+                </div>
+
+                ${
+                    genres.length
+                        ? `
+                            <div
+                                class="genres"
+                            >
+                                ${genres
+                                    .map(
+                                        (
+                                            genre
+                                        ) => `
+                                            <span
+                                                class="
+                                                    genre-tag
+                                                "
+                                            >
+                                                ${escapeHtml(
+                                                    genre
+                                                )}
+                                            </span>
+                                        `
+                                    )
+                                    .join("")}
+                            </div>
+                        `
+                        : ""
+                }
+
+                ${
+                    item.plot
+                        ? `
+                            <div
+                                class="plot"
+                            >
+                                ${escapeHtml(
+                                    item.plot
+                                )}
+                            </div>
+                        `
+                        : ""
+                }
+
+                <div
+                    class="action-buttons"
+                >
+                    <button
+                        id="another-btn"
+                        type="button"
+                    >
+                        🔀 Noch eine Empfehlung
+                    </button>
+
+                    <button
+                        id="restart-btn"
+                        class="btn-secondary"
+                        type="button"
+                    >
+                        🔄 Neu starten
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    attachPosterFallbacks();
+
+    const anotherButton =
+        document.getElementById(
+            "another-btn"
+        );
+
+    if (anotherButton) {
+        anotherButton.addEventListener(
+            "click",
+            getRandomMedia
+        );
+    }
+
+    const restartButton =
+        document.getElementById(
+            "restart-btn"
+        );
+
+    if (restartButton) {
+        restartButton.addEventListener(
+            "click",
+            () => {
+                recent.length = 0;
+
+                renderInitialState();
+
+                window.scrollTo({
+                    top: 0,
+                    behavior: "smooth"
+                });
+            }
+        );
+    }
+}
+
+function renderInitialState() {
+    const resultBox =
+        document.getElementById("result");
+
+    resultBox.innerHTML = `
+        <div class="loading">
+            <span>
+                Klicke auf
+                "Zufallsempfehlung",
+                um zu starten
+            </span>
+        </div>
+    `;
+}
+
+function renderEmpty(message) {
+    const resultBox =
+        document.getElementById("result");
+
+    resultBox.innerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">
+                😕
+            </div>
+
+            <div class="empty-title">
+                Nichts gefunden
+            </div>
+
+            <div class="empty-message">
+                ${escapeHtml(
+                    message ||
+                    "Keine passenden Medien gefunden."
+                )}
+            </div>
+        </div>
+    `;
+}
+
+function renderError(message) {
+    const resultBox =
+        document.getElementById("result");
+
+    resultBox.innerHTML = `
+        <div
+            class="
+                empty-state
+                error-state
+            "
+        >
+            <div
+                class="
+                    empty-icon
+                    error-icon
+                "
+            >
+                ⚠️
+            </div>
+
+            <div class="empty-title">
+                Fehler
+            </div>
+
+            <div class="empty-message">
+                ${escapeHtml(
+                    message ||
+                    "Die Empfehlung konnte nicht geladen werden."
+                )}
+            </div>
+        </div>
+    `;
 }
 
 async function getRandomMedia() {
-    const btn = document.getElementById('spin-btn');
-    const resultBox = document.getElementById('result');
-    
-    if (!btn || !resultBox) return;
-    
-    btn.disabled = true;
-    
-    const kind = document.getElementById('kind-filter')?.value || null;
-    const provider = document.getElementById('provider-filter')?.value || null;
-    const exclude = recent.join('\\n');
-    
-    const url = new URL('/api/random', window.location.origin);
-    if (kind) url.searchParams.set('kind', kind);
-    if (provider) url.searchParams.set('provider', provider);
-    if (exclude) url.searchParams.set('exclude', exclude);
-    
-    // Lade-Animation
+    const button =
+        document.getElementById(
+            "spin-btn"
+        );
+
+    const resultBox =
+        document.getElementById(
+            "result"
+        );
+
+    if (!button || !resultBox) {
+        return;
+    }
+
+    if (button.disabled) {
+        return;
+    }
+
+    button.disabled = true;
+
     resultBox.innerHTML = `
         <div class="loading">
             <div class="spinner"></div>
-            <span>Suche Empfehlung...</span>
+
+            <span>
+                Suche Empfehlung...
+            </span>
         </div>
     `;
-    
+
     try {
-        const res = await fetch(url);
-        const data = await res.json();
-        
-        if (!data.success || !data.item) {
-            resultBox.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">😕</div>
-                    <div class="empty-title">Nichts gefunden</div>
-                    <div class="empty-message">${escapeHtml(data.message)}</div>
-                    <button onclick="location.reload()" class="btn-secondary" style="margin-top:20px">Seite neu laden</button>
-                </div>
-            `;
+        const url =
+            buildRandomUrl();
+
+        const data =
+            await fetchJson(url);
+
+        if (
+            !data ||
+            !data.success ||
+            !data.item
+        ) {
+            renderEmpty(
+                data?.message
+            );
+
             return;
         }
-        
-        const item = data.item;
-        const key = `${item.kind}|${item.title}|${item.year || ''}|${item.provider || ''}`;
-        recent.unshift(key);
-        while (recent.length > RECENT_LIMIT) recent.pop();
-        
-        // Titel anzeigen (NICHT Provider!)
-        resultBox.innerHTML = `
-            <div class="poster-card">
-                ${renderPoster(item)}
-                <div class="media-info">
-                    <div class="media-header">
-                        <span class="media-type">${item.kind === 'movie' ? 'Film' : 'Serie'}</span>
-                        <h2 class="media-title">${escapeHtml(item.title)}</h2>
-                        ${item.year ? `<span class="media-year">(${item.year})</span>` : ''}
-                    </div>
-                    
-                    <div class="meta-grid">
-                        <div class="meta-item">
-                            <span class="meta-label">Anbieter</span>
-                            <span class="meta-value">${escapeHtml(item.provider)}</span>
-                        </div>
-                        ${item.rating ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Rating</span>
-                            <span class="meta-value">⭐ ${Number(item.rating).toFixed(1)}</span>
-                        </div>
-                        ` : ''}
-                        ${item.runtime ? `
-                        <div class="meta-item">
-                            <span class="meta-label">Laufzeit</span>
-                            <span class="meta-value">${Math.round(item.runtime / 60)} Min</span>
-                        </div>
-                        ` : ''}
-                    </div>
-                    
-                    ${item.genres ? `
-                        <div class="genres">
-                            ${item.genres.split(', ').map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`).join('')}
-                        </div>
-                    ` : ''}
-                    
-                    ${item.plot ? `
-                        <div class="plot">${escapeHtml(item.plot)}</div>
-                    ` : ''}
-                    
-                    <div class="action-buttons">
-                        <button id="another-btn">🔀 Noch eine Empfehlung</button>
-                        <button class="btn-secondary" onclick="location.reload()">🔄 Neu starten</button>
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // Button für neue Empfehlung
-        const anotherBtn = document.getElementById('another-btn');
-        if (anotherBtn) {
-            anotherBtn.addEventListener('click', getRandomMedia);
-        }
 
-    } catch (err) {
-        console.error('Error:', err);
-        resultBox.innerHTML = `
-            <div class="empty-state error-state">
-                <div class="empty-icon error-icon">⚠️</div>
-                <div class="empty-title">Fehler</div>
-                <div class="empty-message">Die Empfehlung konnte nicht geladen werden.</div>
-            </div>
-        `;
+        const item = data.item;
+
+        addRecentTitle(
+            item.title
+        );
+
+        renderResult(item);
+
+    } catch (error) {
+        console.error(
+            "Random media request failed:",
+            error
+        );
+
+        if (
+            error?.name ===
+            "AbortError"
+        ) {
+            renderError(
+                "Die Anfrage hat zu lange gedauert."
+            );
+        } else {
+            renderError(
+                "Die Empfehlung konnte nicht geladen werden."
+            );
+        }
     } finally {
-        btn.disabled = false;
+        button.disabled = false;
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    loadStats();
-    
-    const spinBtn = document.getElementById('spin-btn');
-    if (spinBtn) {
-        spinBtn.addEventListener('click', getRandomMedia);
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        loadStats();
+
+        const spinButton =
+            document.getElementById(
+                "spin-btn"
+            );
+
+        if (spinButton) {
+            spinButton.addEventListener(
+                "click",
+                getRandomMedia
+            );
+        }
     }
-});
+);
 </script>
+
 {% endblock %}
