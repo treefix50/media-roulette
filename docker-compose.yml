@@ -1,26 +1,38 @@
-version: '3.8'
-
 services:
   media-roulette:
     build: .
     container_name: media-roulette
-    network_mode: "bridge"  # Nutzt Standard UnRAID Docker Network
+
+    network_mode: "bridge"
+
     ports:
       - "8000:8000"
+
     environment:
       MOVIES_DIR: /data/movies
       SERIES_DIR: /data/series
       DATABASE_PATH: /state/media-roulette.db
-      TZ: Europe/Berlin  # Zeitzone für Logs
+      TZ: Europe/Berlin
+
     volumes:
-      # WICHTIG: Deine tatsächlichen UnRAID-Pfade!
+      # Medien ausschließlich lesbar einbinden.
       - /mnt/user/data/media/movies:/data/movies:ro
       - /mnt/user/data/media/tv:/data/series:ro
+
+      # SQLite-Datenbank separat und dauerhaft speichern.
       - /mnt/user/appdata/media-roulette/state:/state
+
     restart: unless-stopped
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
