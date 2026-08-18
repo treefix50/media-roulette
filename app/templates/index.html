@@ -630,6 +630,7 @@ function getPosterUrl(item) {
     return null;
 }
 
+
 function posterPlaceholder(item) {
     const icon =
         item?.kind === "movie"
@@ -643,8 +644,10 @@ function posterPlaceholder(item) {
     `;
 }
 
+
 function renderPoster(item) {
-    const posterSrc = getPosterUrl(item);
+    const posterSrc =
+        getPosterUrl(item);
 
     if (!posterSrc) {
         return `
@@ -667,24 +670,35 @@ function renderPoster(item) {
     `;
 }
 
+
 function attachPosterFallbacks() {
     document
-        .querySelectorAll(".poster-image img")
+        .querySelectorAll(
+            ".poster-image img"
+        )
         .forEach((image) => {
+
             image.addEventListener(
                 "error",
                 () => {
+
                     const kind =
-                        image.dataset.fallbackKind;
+                        image.dataset
+                            .fallbackKind;
 
                     const item = {
                         kind
                     };
 
-                    image.parentElement.innerHTML =
-                        posterPlaceholder(item);
+                    image.parentElement
+                        .innerHTML =
+                            posterPlaceholder(
+                                item
+                            );
                 },
-                { once: true }
+                {
+                    once: true
+                }
             );
         });
 }
