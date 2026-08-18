@@ -51,6 +51,7 @@ VIDEO_EXTENSIONS = {
 # werden ignoriert, solange sie hier nicht eingetragen sind.
 PROVIDERS = {
     "max",
+    "prime",
     "peacock",
     "paramount",
     "appletv",
