@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import ipaddress
 import logging
-import os
 import re
 import sqlite3
 import threading
-import urllib.error
-import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -35,9 +29,9 @@ VIDEO_EXTENSIONS = {
 }
 
 
-# --------------------------------------------------------------
+# ==============================================================
 # FESTE PROVIDER
-# --------------------------------------------------------------
+# ==============================================================
 
 PROVIDERS = {
     "max",
@@ -52,9 +46,17 @@ PROVIDERS = {
 }
 
 
-# --------------------------------------------------------------
+# ==============================================================
 # POSTER
-# --------------------------------------------------------------
+# ==============================================================
+
+POSTER_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+}
+
 
 POSTER_FILENAMES = (
     "poster.jpg",
@@ -79,18 +81,14 @@ POSTER_FILENAMES = (
     "tvshow.webp",
 )
 
-POSTER_MAX_BYTES = 10 * 1024 * 1024
-
-POSTER_TIMEOUT = 15
-
-POSTER_CACHE_DIRNAME = "poster_cache"
-
 
 # ==============================================================
 # HILFSFUNKTIONEN
 # ==============================================================
 
-def _clean(value: str | None) -> str | None:
+def _clean(
+    value: str | None,
+) -> str | None:
     if value is None:
         return None
 
@@ -115,7 +113,9 @@ def _nfo_value(
     return _clean(node.text)
 
 
-def _parse_number(value: Any) -> float | None:
+def _parse_number(
+    value: Any,
+) -> float | None:
     if value is None:
         return None
 
@@ -123,7 +123,10 @@ def _parse_number(value: Any) -> float | None:
         return float(
             str(value).replace(",", ".")
         )
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
 
 
@@ -137,8 +140,8 @@ def parse_nfo(
     """
     Liest Metadaten aus einer NFO.
 
-    Fehlerhafte NFOs dürfen niemals den kompletten
-    Bibliotheksscan abbrechen.
+    Eine fehlerhafte oder unlesbare NFO darf niemals den
+    kompletten Bibliotheksscan abbrechen.
     """
 
     if path is None:
@@ -181,7 +184,6 @@ def parse_nfo(
         "tmdbid",
         "imdbid",
     ):
-
         value = _nfo_value(
             root,
             field,
@@ -197,102 +199,86 @@ def parse_nfo(
     genres: list[str] = []
 
     for node in root.findall("genre"):
-
-        value = _clean(
-            node.text
-        )
+        value = _clean(node.text)
 
         if value:
             genres.append(value)
 
     if genres:
-
         data["genres"] = ", ".join(
             dict.fromkeys(genres)
         )
 
     # ----------------------------------------------------------
     # POSTER AUS NFO
+    # ----------------------------------------------------------
     #
-    # Unterstützt:
+    # Unterstützt beispielsweise:
     #
-    # <thumb>...</thumb>
-    # <thumb aspect="poster">...</thumb>
+    # <thumb aspect="poster">poster.jpg</thumb>
     #
-    # sowie:
+    # <thumb>poster.jpg</thumb>
     #
     # <art>
-    #     <poster>...</poster>
+    #     <poster>poster.jpg</poster>
     # </art>
+    #
+    # Auch Remote-URLs werden zunächst gespeichert.
+    # Die lokale Posterauflösung entscheidet später, ob daraus
+    # eine lokale Datei wird.
     # ----------------------------------------------------------
 
     poster: str | None = None
 
-    # Zuerst explizit aspect="poster"
+    # 1. Expliziter Poster-Thumb
     for thumb in root.findall("thumb"):
 
         aspect = (
             thumb.attrib.get("aspect") or ""
         ).strip().casefold()
 
-        value = _clean(
-            thumb.text
-        )
+        value = _clean(thumb.text)
 
-        if (
-            value
-            and aspect == "poster"
-        ):
+        if not value:
+            continue
+
+        if aspect == "poster":
             poster = value
             break
 
-    # Danach <thumb> ohne aspect.
-    #
-    # Einige NFOs verwenden einfach:
-    #
-    # <thumb>poster.jpg</thumb>
-    #
-    if not poster:
-
-        for thumb in root.findall("thumb"):
-
-            aspect = (
-                thumb.attrib.get("aspect") or ""
-            ).strip().casefold()
-
-            value = _clean(
-                thumb.text
-            )
-
-            if (
-                value
-                and not aspect
-            ):
-                poster = value
-                break
-
-    # Danach <art><poster>
+    # 2. <art><poster>
     if not poster:
 
         art = root.find("art")
 
         if art is not None:
 
-            poster_node = art.find(
-                "poster"
-            )
+            poster_node = art.find("poster")
 
             if poster_node is not None:
-
                 poster = _clean(
                     poster_node.text
                 )
+
+    # 3. Falls kein aspect gesetzt ist,
+    #    ersten brauchbaren Thumb verwenden.
+    if not poster:
+
+        for thumb in root.findall("thumb"):
+
+            value = _clean(
+                thumb.text
+            )
+
+            if value:
+                poster = value
+                break
 
     if poster:
         data["poster"] = poster
 
     # ----------------------------------------------------------
-    # Rating
+    # RATING
     # ----------------------------------------------------------
 
     rating = _parse_number(
@@ -301,6 +287,7 @@ def parse_nfo(
 
     if rating is not None:
 
+        # Manche NFOs verwenden 0-5.
         if 0 < rating <= 5:
             rating *= 2
 
@@ -312,7 +299,7 @@ def parse_nfo(
     data["rating"] = rating
 
     # ----------------------------------------------------------
-    # Runtime
+    # RUNTIME
     # ----------------------------------------------------------
 
     runtime = _parse_number(
@@ -325,6 +312,8 @@ def parse_nfo(
             round(runtime)
         )
 
+        # Historisch unterstützen wir NFOs,
+        # die Stunden statt Minuten enthalten.
         if 0 < runtime < 100:
             runtime *= 60
 
@@ -336,7 +325,7 @@ def parse_nfo(
     data["runtime"] = runtime
 
     # ----------------------------------------------------------
-    # Jahr
+    # YEAR
     # ----------------------------------------------------------
 
     year = data.get("year")
@@ -349,13 +338,10 @@ def parse_nfo(
         )
 
         if match:
-
             data["year"] = int(
                 match.group(1)
             )
-
         else:
-
             data["year"] = None
 
     return data
@@ -368,6 +354,15 @@ def parse_nfo(
 def parse_name(
     name: str,
 ) -> tuple[str, int | None]:
+    """
+    Extrahiert Titel und Jahr aus Ordner-/Dateinamen.
+
+    Beispiele:
+
+        The Matrix (1999)
+        The.Matrix.1999
+        The Matrix - 1999
+    """
 
     text = Path(name).stem
 
@@ -430,13 +425,18 @@ class Library:
 
         /tv/PROVIDER/SERIE/
 
-    Es werden ausschließlich Provider aus PROVIDERS verarbeitet.
+    Nur fest definierte Provider werden akzeptiert.
 
-    Serien werden als Serienordner gespeichert:
+    Filme:
 
-        /tv/max/Power Book IV Force/
+        path = tatsächliche Videodatei
 
-    und NICHT als einzelne Episode.
+    Serien:
+
+        path = Serienordner
+
+    Dadurch wird eine Serie unabhängig von ihren Seasons
+    genau einmal als Media-Eintrag geführt.
     """
 
     def __init__(
@@ -445,132 +445,38 @@ class Library:
         movies_dir: str,
         series_dir: str,
     ):
-
         self.db_path = Path(
             db_path
-        ).expanduser()
+        )
 
         self.movies_dir = Path(
             movies_dir
-        ).expanduser()
+        )
 
         self.series_dir = Path(
             series_dir
-        ).expanduser()
-
-        self._scan_lock = (
-            threading.Lock()
         )
 
-        # ----------------------------------------------------------
-        # Poster-Cache
-        #
-        # Der Cache liegt absichtlich NICHT im Medienordner.
-        # ----------------------------------------------------------
-
-        self.poster_cache_dir = (
-            self.db_path.parent
-            / POSTER_CACHE_DIRNAME
-        )
-
-        self._prepare_secure_storage()
+        self._scan_lock = threading.Lock()
 
         self._init_db()
 
-    # ==============================================================
-    # SECURE STORAGE
-    # ==============================================================
+        # Datenbankdatei möglichst restriktiv absichern.
+        self._secure_database_permissions()
 
-    def _prepare_secure_storage(
-        self,
-    ) -> None:
-        """
-        Erstellt DB- und Poster-Verzeichnis mit möglichst
-        restriktiven Dateirechten.
-
-        Unter Unix/Linux:
-
-            Verzeichnis = 0700
-            Dateien      = 0600
-
-        Unter Windows greifen diese POSIX-Modi nur eingeschränkt;
-        dort muss zusätzlich das Dateisystem-/NTFS-Berechtigungsmodell
-        verwendet werden.
-        """
-
-        try:
-
-            self.db_path.parent.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            self.poster_cache_dir.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            self._chmod_directory(
-                self.db_path.parent
-            )
-
-            self._chmod_directory(
-                self.poster_cache_dir
-            )
-
-            if self.db_path.exists():
-
-                self._chmod_file(
-                    self.db_path
-                )
-
-        except OSError:
-
-            logger.warning(
-                "Unable to fully harden database storage permissions.",
-                exc_info=True,
-            )
-
-    @staticmethod
-    def _chmod_directory(
-        path: Path,
-    ) -> None:
-
-        try:
-
-            if os.name != "nt":
-
-                path.chmod(
-                    0o700
-                )
-
-        except OSError:
-            pass
-
-    @staticmethod
-    def _chmod_file(
-        path: Path,
-    ) -> None:
-
-        try:
-
-            if os.name != "nt":
-
-                path.chmod(
-                    0o600
-                )
-
-        except OSError:
-            pass
-
-    # ==============================================================
-    # PROVIDERS
-    # ==============================================================
+    # ==========================================================
+    # PROVIDER
+    # ==========================================================
 
     @staticmethod
     def _normalize_provider(
         provider: str | None,
     ) -> str | None:
+        """
+        Normalisiert Provider auf lowercase.
+
+        Nicht erlaubte Provider werden verworfen.
+        """
 
         if provider is None:
             return None
@@ -590,9 +496,23 @@ class Library:
     @staticmethod
     def _provider_dirs(
         root_dir: Path,
-    ) -> list[
-        tuple[str, Path]
-    ] | None:
+    ) -> list[tuple[str, Path]] | None:
+        """
+        Liefert ausschließlich erlaubte Providerordner.
+
+        Beispiel:
+
+            /tv/max
+            /tv/netflix
+            /tv/hbo
+
+        ergibt:
+
+            max
+            netflix
+
+        hbo wird ignoriert.
+        """
 
         try:
 
@@ -635,7 +555,7 @@ class Library:
 
             result.sort(
                 key=lambda item:
-                item[0].casefold()
+                    item[0].casefold()
             )
 
             return result
@@ -649,9 +569,9 @@ class Library:
 
             return None
 
-    # ==============================================================
+    # ==========================================================
     # DATABASE
-    # ==============================================================
+    # ==========================================================
 
     def _connect(
         self,
@@ -685,15 +605,36 @@ class Library:
             "PRAGMA foreign_keys=ON"
         )
 
-        # ----------------------------------------------------------
-        # DB-Datei wieder absichern.
-        # ----------------------------------------------------------
-
-        self._chmod_file(
-            self.db_path
-        )
-
         return conn
+
+    def _secure_database_permissions(
+        self,
+    ) -> None:
+        """
+        Versucht die SQLite-Datei auf 0600 zu setzen.
+
+        Damit kann unter Linux nur der Besitzer der Datei
+        lesen und schreiben.
+
+        Falls das Dateisystem chmod nicht unterstützt oder
+        die Datei noch nicht existiert, wird der Fehler nicht
+        zum Scan-Abbruch.
+        """
+
+        try:
+
+            if self.db_path.exists():
+
+                self.db_path.chmod(
+                    0o600
+                )
+
+        except OSError:
+
+            logger.warning(
+                "Unable to restrict database permissions: %s",
+                self.db_path,
+            )
 
     def _init_db(
         self,
@@ -733,7 +674,6 @@ class Library:
             }
 
             migrations = {
-
                 "tmdbid":
                     "ALTER TABLE media "
                     "ADD COLUMN tmdbid TEXT",
@@ -751,9 +691,10 @@ class Library:
                     "ADD COLUMN poster_path TEXT",
             }
 
-            for column, statement in (
-                migrations.items()
-            ):
+            for (
+                column,
+                statement,
+            ) in migrations.items():
 
                 if column not in columns:
 
@@ -801,13 +742,11 @@ class Library:
                 """
             )
 
-        self._chmod_file(
-            self.db_path
-        )
+        self._secure_database_permissions()
 
-    # ==============================================================
+    # ==========================================================
     # FILESYSTEM
-    # ==============================================================
+    # ==========================================================
 
     @staticmethod
     def _iter_dirs(
@@ -848,14 +787,13 @@ class Library:
     ) -> Path | None:
 
         preferred = (
-            directory
-            / preferred_name
+            directory / preferred_name
         )
 
         try:
 
             if preferred.is_file():
-                return preferred
+                return preferred.resolve()
 
             nfos = sorted(
                 (
@@ -869,11 +807,10 @@ class Library:
                     item.name.casefold(),
             )
 
-            return (
-                nfos[0]
-                if nfos
-                else None
-            )
+            if not nfos:
+                return None
+
+            return nfos[0].resolve()
 
         except OSError:
             return None
@@ -882,6 +819,12 @@ class Library:
     def _find_first_video(
         directory: Path,
     ) -> Path | None:
+        """
+        Sucht deterministisch nach einer Videodatei.
+
+        Bei Serien dient die Datei nur dazu festzustellen,
+        dass die Serie tatsächlich Videoinhalt besitzt.
+        """
 
         try:
 
@@ -912,93 +855,95 @@ class Library:
 
             return None
 
-    # ==============================================================
-    # POSTER - LOCAL
-    # ==============================================================
-
     @staticmethod
     def _find_local_poster(
         directory: Path,
         nfo_poster: str | None,
     ) -> Path | None:
         """
-        Sucht zuerst das explizit in der NFO angegebene Poster.
+        Ermittelt ein lokales Poster.
 
-        Danach bekannte lokale Posterdateien.
+        Priorität:
 
-        Unterstützt auch file://-URLs.
+        1. Posterpfad aus der NFO
+        2. Standardnamen im Media-Ordner
+
+        Remote-URLs werden NICHT als lokale Datei behandelt.
+
+        Unterstützt:
+
+            poster.jpg
+            poster.jpeg
+            poster.png
+            poster.webp
+
+        sowie folder/cover/movie/tvshow.
         """
+
+        # ------------------------------------------------------
+        # Poster aus NFO
+        # ------------------------------------------------------
 
         if nfo_poster:
 
             value = nfo_poster.strip()
 
-            # ------------------------------------------------------
-            # file://
-            # ------------------------------------------------------
+            # Remote-URL ist kein lokaler Pfad.
+            if re.match(
+                r"^https?://",
+                value,
+                re.IGNORECASE,
+            ):
+                return None
 
-            if value.casefold().startswith(
+            # file:// URLs unterstützen
+            if value.lower().startswith(
                 "file://"
             ):
+                value = value[7:]
 
-                try:
+            candidate = Path(
+                value
+            )
 
-                    parsed = urllib.parse.urlparse(
-                        value
-                    )
-
-                    candidate = Path(
-                        urllib.request.url2pathname(
-                            parsed.path
-                        )
-                    )
-
-                except (
-                    ValueError,
-                    OSError,
-                ):
-
-                    candidate = None
-
-            else:
-
-                candidate = Path(
-                    value
+            if not candidate.is_absolute():
+                candidate = (
+                    directory / candidate
                 )
 
-            if candidate is not None:
+            try:
 
-                if not candidate.is_absolute():
+                candidate = (
+                    candidate.resolve()
+                )
 
-                    candidate = (
-                        directory
-                        / candidate
-                    )
+                if (
+                    candidate.is_file()
+                    and candidate.suffix.lower()
+                    in POSTER_EXTENSIONS
+                ):
+                    return candidate
 
-                try:
+            except OSError:
+                pass
 
-                    if candidate.is_file():
-
-                        return candidate.resolve()
-
-                except OSError:
-                    pass
-
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
         # Standardnamen
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
 
         for filename in POSTER_FILENAMES:
 
             candidate = (
-                directory
-                / filename
+                directory / filename
             )
 
             try:
 
-                if candidate.is_file():
-
+                if (
+                    candidate.is_file()
+                    and candidate.suffix.lower()
+                    in POSTER_EXTENSIONS
+                ):
                     return candidate.resolve()
 
             except OSError:
@@ -1006,482 +951,9 @@ class Library:
 
         return None
 
-    # ==============================================================
-    # POSTER - URL SECURITY
-    # ==============================================================
-
-    @staticmethod
-    def _is_public_hostname(
-        hostname: str | None,
-    ) -> bool:
-        """
-        Verhindert Poster-Downloads zu lokalen/private IPs.
-
-        Damit kann eine manipulierte NFO nicht einfach versuchen,
-        interne Dienste wie:
-
-            127.0.0.1
-            localhost
-            192.168.x.x
-            10.x.x.x
-            172.16.x.x
-
-        anzusprechen.
-
-        DNS-Auflösung wird bewusst ebenfalls geprüft.
-        """
-
-        if not hostname:
-            return False
-
-        hostname = hostname.strip()
-
-        if not hostname:
-            return False
-
-        if hostname.casefold() in {
-            "localhost",
-            "localhost.localdomain",
-        }:
-            return False
-
-        try:
-
-            ip = ipaddress.ip_address(
-                hostname
-            )
-
-            return (
-                not ip.is_private
-                and not ip.is_loopback
-                and not ip.is_link_local
-                and not ip.is_reserved
-                and not ip.is_multicast
-            )
-
-        except ValueError:
-            pass
-
-        try:
-
-            import socket
-
-            addresses = socket.getaddrinfo(
-                hostname,
-                None,
-            )
-
-            for address in addresses:
-
-                ip_text = address[4][0]
-
-                ip = ipaddress.ip_address(
-                    ip_text
-                )
-
-                if (
-                    ip.is_private
-                    or ip.is_loopback
-                    or ip.is_link_local
-                    or ip.is_reserved
-                    or ip.is_multicast
-                ):
-                    return False
-
-            return bool(addresses)
-
-        except OSError:
-
-            return False
-
-    @classmethod
-    def _poster_url_allowed(
-        cls,
-        value: str,
-    ) -> bool:
-
-        try:
-
-            parsed = urllib.parse.urlparse(
-                value
-            )
-
-        except ValueError:
-
-            return False
-
-        if parsed.scheme.casefold() not in {
-            "http",
-            "https",
-        }:
-            return False
-
-        if not parsed.hostname:
-            return False
-
-        return cls._is_public_hostname(
-            parsed.hostname
-        )
-
-    # ==============================================================
-    # POSTER - REMOTE DOWNLOAD
-    # ==============================================================
-
-    def _poster_cache_path(
-        self,
-        url: str,
-    ) -> Path:
-
-        digest = hashlib.sha256(
-            url.encode(
-                "utf-8"
-            )
-        ).hexdigest()
-
-        return (
-            self.poster_cache_dir
-            / f"{digest}.img"
-        )
-
-    @staticmethod
-    def _detect_image_extension(
-        data: bytes,
-    ) -> str | None:
-
-        # JPEG
-        if data.startswith(
-            b"\xff\xd8\xff"
-        ):
-            return ".jpg"
-
-        # PNG
-        if data.startswith(
-            b"\x89PNG\r\n\x1a\n"
-        ):
-            return ".png"
-
-        # WEBP
-        if (
-            data.startswith(b"RIFF")
-            and data[8:12] == b"WEBP"
-        ):
-            return ".webp"
-
-        return None
-
-    def _download_poster(
-        self,
-        url: str,
-    ) -> Path | None:
-        """
-        Lädt ein NFO-Poster einmalig in den privaten Poster-Cache.
-
-        Nur JPEG, PNG und WEBP werden akzeptiert.
-
-        Maximale Größe:
-            POSTER_MAX_BYTES
-        """
-
-        if not self._poster_url_allowed(
-            url
-        ):
-
-            logger.warning(
-                "Rejected unsafe poster URL: %s",
-                url,
-            )
-
-            return None
-
-        base_cache_path = (
-            self._poster_cache_path(
-                url
-            )
-        )
-
-        # ----------------------------------------------------------
-        # Bereits gecacht
-        # ----------------------------------------------------------
-
-        for extension in (
-            ".jpg",
-            ".png",
-            ".webp",
-        ):
-
-            cached = (
-                base_cache_path.with_suffix(
-                    extension
-                )
-            )
-
-            try:
-
-                if cached.is_file():
-
-                    if cached.stat().st_size > 0:
-
-                        return cached
-
-            except OSError:
-                continue
-
-        # ----------------------------------------------------------
-        # Download
-        # ----------------------------------------------------------
-
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent":
-                    "Media-Roulette/1.0",
-                "Accept":
-                    "image/jpeg,image/png,image/webp,*/*;q=0.5",
-            },
-        )
-
-        temp_path = (
-            base_cache_path.with_suffix(
-                ".tmp"
-            )
-        )
-
-        try:
-
-            with urllib.request.urlopen(
-                request,
-                timeout=POSTER_TIMEOUT,
-            ) as response:
-
-                content_type = (
-                    response.headers.get(
-                        "Content-Type",
-                        "",
-                    )
-                    .split(";")[0]
-                    .strip()
-                    .casefold()
-                )
-
-                if content_type not in {
-                    "image/jpeg",
-                    "image/jpg",
-                    "image/png",
-                    "image/webp",
-                    "",
-                }:
-
-                    logger.warning(
-                        "Rejected poster with content type %s: %s",
-                        content_type,
-                        url,
-                    )
-
-                    return None
-
-                total = 0
-
-                with open(
-                    temp_path,
-                    "wb",
-                ) as output:
-
-                    while True:
-
-                        chunk = response.read(
-                            64 * 1024
-                        )
-
-                        if not chunk:
-                            break
-
-                        total += len(
-                            chunk
-                        )
-
-                        if total > POSTER_MAX_BYTES:
-
-                            logger.warning(
-                                "Poster too large: %s",
-                                url,
-                            )
-
-                            return None
-
-                        output.write(
-                            chunk
-                        )
-
-            temp_path.chmod(
-                0o600
-                if os.name != "nt"
-                else 0o666
-            )
-
-            temp_path_data = (
-                temp_path.read_bytes()
-            )
-
-            extension = (
-                self._detect_image_extension(
-                    temp_path_data
-                )
-            )
-
-            if extension is None:
-
-                logger.warning(
-                    "Downloaded poster is not a supported image: %s",
-                    url,
-                )
-
-                return None
-
-            final_path = (
-                base_cache_path.with_suffix(
-                    extension
-                )
-            )
-
-            os.replace(
-                temp_path,
-                final_path,
-            )
-
-            self._chmod_file(
-                final_path
-            )
-
-            return final_path
-
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            OSError,
-        ):
-
-            logger.warning(
-                "Unable to download poster: %s",
-                url,
-                exc_info=True,
-            )
-
-            return None
-
-        finally:
-
-            try:
-
-                if temp_path.exists():
-                    temp_path.unlink()
-
-            except OSError:
-                pass
-
-    # ==============================================================
-    # POSTER - RESOLVER
-    # ==============================================================
-
-    def _resolve_poster(
-        self,
-        directory: Path,
-        nfo_poster: str | None,
-    ) -> tuple[
-        str | None,
-        Path | None,
-    ]:
-        """
-        Liefert:
-
-            poster
-                Originalwert aus der NFO
-
-            poster_path
-                IMMER möglichst lokaler Pfad
-
-        Das ist der entscheidende Teil für die Anzeige.
-        """
-
-        if nfo_poster:
-
-            value = nfo_poster.strip()
-
-            # ------------------------------------------------------
-            # HTTP/HTTPS
-            # ------------------------------------------------------
-
-            if value.casefold().startswith(
-                (
-                    "http://",
-                    "https://",
-                )
-            ):
-
-                cached = (
-                    self._download_poster(
-                        value
-                    )
-                )
-
-                if cached:
-
-                    return (
-                        value,
-                        cached,
-                    )
-
-                # Kein lokaler Cache möglich.
-                # Originalwert bleibt trotzdem erhalten.
-                return (
-                    value,
-                    None,
-                )
-
-            # ------------------------------------------------------
-            # Lokale Datei
-            # ------------------------------------------------------
-
-            local = (
-                self._find_local_poster(
-                    directory,
-                    value,
-                )
-            )
-
-            if local:
-
-                return (
-                    value,
-                    local,
-                )
-
-        # ----------------------------------------------------------
-        # Kein brauchbarer NFO-Eintrag:
-        # lokale Standardposter suchen.
-        # ----------------------------------------------------------
-
-        local = (
-            self._find_local_poster(
-                directory,
-                None,
-            )
-        )
-
-        if local:
-
-            return (
-                None,
-                local,
-            )
-
-        return (
-            nfo_poster,
-            None,
-        )
-
-    # ==============================================================
+    # ==========================================================
     # ITEM BUILDER
-    # ==============================================================
+    # ==========================================================
 
     def _build_item(
         self,
@@ -1538,25 +1010,38 @@ class Library:
             if year is None:
                 year = name_year
 
-        # ----------------------------------------------------------
-        # POSTER
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
+        # Poster
+        # ------------------------------------------------------
 
-        poster, poster_path = (
-            self._resolve_poster(
+        nfo_poster = data.get(
+            "poster"
+        )
+
+        poster_path = (
+            self._find_local_poster(
                 media_dir,
-                data.get("poster"),
+                nfo_poster,
             )
         )
 
-        # ----------------------------------------------------------
-        # Pfad
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
+        # Path
+        # ------------------------------------------------------
 
         if kind == "series":
+
+            # Serie selbst ist der DB-Eintrag.
             media_path = media_dir
+
         else:
+
+            # Film verweist auf die tatsächliche Videodatei.
             media_path = first_video
+
+        # ------------------------------------------------------
+        # Resolve
+        # ------------------------------------------------------
 
         try:
 
@@ -1565,6 +1050,11 @@ class Library:
             )
 
         except OSError:
+
+            logger.warning(
+                "Unable to resolve media path: %s",
+                media_path,
+            )
 
             return None
 
@@ -1592,6 +1082,25 @@ class Library:
 
             resolved_poster_path = None
 
+        # ------------------------------------------------------
+        # Logging
+        # ------------------------------------------------------
+
+        if resolved_poster_path:
+
+            logger.debug(
+                "Poster found: %s -> %s",
+                media_dir,
+                resolved_poster_path,
+            )
+
+        else:
+
+            logger.debug(
+                "No local poster found: %s",
+                media_dir,
+            )
+
         return {
             "kind": kind,
 
@@ -1599,8 +1108,7 @@ class Library:
                 normalized_provider,
 
             "title":
-                title
-                or media_dir.name,
+                title or media_dir.name,
 
             "year":
                 year,
@@ -1637,11 +1145,9 @@ class Library:
             "imdbid":
                 data.get("imdbid"),
 
-            # Originaler NFO-Wert
             "poster":
-                poster,
+                data.get("poster"),
 
-            # Lokale, tatsächlich anzeigbare Datei
             "poster_path":
                 (
                     str(
@@ -1652,16 +1158,19 @@ class Library:
                 ),
         }
 
-    # ==============================================================
+    # ==========================================================
     # MOVIES
-    # ==============================================================
+    # ==========================================================
 
     def _scan_movies(
         self,
         root_dir: Path,
-    ) -> list[
-        dict[str, Any]
-    ] | None:
+    ) -> list[dict[str, Any]] | None:
+        """
+        Struktur:
+
+            /movies/PROVIDER/FILM/
+        """
 
         provider_dirs = (
             self._provider_dirs(
@@ -1696,15 +1205,18 @@ class Library:
 
                 continue
 
+            logger.debug(
+                "Scanning movie provider: %s",
+                provider,
+            )
+
             for movie_dir in movie_dirs:
 
-                item = (
-                    self._build_item(
-                        kind="movie",
-                        provider=provider,
-                        media_dir=movie_dir,
-                        preferred_nfo="movie.nfo",
-                    )
+                item = self._build_item(
+                    kind="movie",
+                    provider=provider,
+                    media_dir=movie_dir,
+                    preferred_nfo="movie.nfo",
                 )
 
                 if item:
@@ -1719,16 +1231,28 @@ class Library:
 
         return items
 
-    # ==============================================================
+    # ==========================================================
     # SERIES
-    # ==============================================================
+    # ==========================================================
 
     def _scan_series(
         self,
         root_dir: Path,
-    ) -> list[
-        dict[str, Any]
-    ] | None:
+    ) -> list[dict[str, Any]] | None:
+        """
+        Struktur:
+
+            /tv/PROVIDER/SERIE/
+
+        Beispiel:
+
+            /tv/max/Power Book IV Force/
+                Season 01/
+                Season 02/
+                Season 03/
+
+        ergibt genau einen Eintrag.
+        """
 
         provider_dirs = (
             self._provider_dirs(
@@ -1763,15 +1287,24 @@ class Library:
 
                 continue
 
+            logger.debug(
+                "Scanning series provider: %s",
+                provider,
+            )
+
             for series_dir in series_dirs:
 
-                item = (
-                    self._build_item(
-                        kind="series",
-                        provider=provider,
-                        media_dir=series_dir,
-                        preferred_nfo="tvshow.nfo",
-                    )
+                logger.debug(
+                    "Scanning series: %s/%s",
+                    provider,
+                    series_dir.name,
+                )
+
+                item = self._build_item(
+                    kind="series",
+                    provider=provider,
+                    media_dir=series_dir,
+                    preferred_nfo="tvshow.nfo",
                 )
 
                 if item:
@@ -1786,16 +1319,14 @@ class Library:
 
         return items
 
-    # ==============================================================
+    # ==========================================================
     # DATABASE UPDATE
-    # ==============================================================
+    # ==========================================================
 
     @staticmethod
     def _upsert_items(
         db: sqlite3.Connection,
-        items: list[
-            dict[str, Any]
-        ],
+        items: list[dict[str, Any]],
     ) -> None:
 
         for item in items:
@@ -1871,17 +1402,15 @@ class Library:
                 ),
             )
 
-    # ==============================================================
+    # ==========================================================
     # CLEANUP
-    # ==============================================================
+    # ==========================================================
 
     @staticmethod
     def _delete_missing_from_root(
         db: sqlite3.Connection,
         root_dir: Path,
-        items: list[
-            dict[str, Any]
-        ],
+        items: list[dict[str, Any]],
     ) -> None:
 
         try:
@@ -1905,8 +1434,7 @@ class Library:
 
         db.execute(
             """
-            CREATE TEMP TABLE IF NOT EXISTS
-            scan_paths (
+            CREATE TEMP TABLE IF NOT EXISTS scan_paths (
                 path TEXT PRIMARY KEY
             )
             """
@@ -1920,13 +1448,13 @@ class Library:
 
             db.executemany(
                 """
-                INSERT OR IGNORE INTO
-                scan_paths(path)
+                INSERT OR IGNORE INTO scan_paths(path)
                 VALUES (?)
                 """,
                 (
                     (path,)
-                    for path in current_paths
+                    for path
+                    in current_paths
                 ),
             )
 
@@ -1944,9 +1472,9 @@ class Library:
             ),
         )
 
-    # ==============================================================
+    # ==========================================================
     # FULL SCAN
-    # ==============================================================
+    # ==========================================================
 
     def scan(
         self,
@@ -1955,7 +1483,6 @@ class Library:
         if not self._scan_lock.acquire(
             blocking=False
         ):
-
             return self.stats()[
                 "total"
             ]
@@ -1980,9 +1507,9 @@ class Library:
                     "BEGIN"
                 )
 
-                # --------------------------------------------------
+                # ------------------------------------------------
                 # Filme
-                # --------------------------------------------------
+                # ------------------------------------------------
 
                 if movie_items is not None:
 
@@ -2004,9 +1531,9 @@ class Library:
                         "Existing movie records preserved."
                     )
 
-                # --------------------------------------------------
+                # ------------------------------------------------
                 # Serien
-                # --------------------------------------------------
+                # ------------------------------------------------
 
                 if series_items is not None:
 
@@ -2053,6 +1580,8 @@ class Library:
                     """
                 ).fetchone()[0]
 
+                self._secure_database_permissions()
+
                 logger.info(
                     "Library scan finished: "
                     "%d total, %d movies, %d series",
@@ -2061,9 +1590,7 @@ class Library:
                     series,
                 )
 
-                return int(
-                    total
-                )
+                return int(total)
 
         except Exception:
 
@@ -2077,20 +1604,16 @@ class Library:
 
             self._scan_lock.release()
 
-    # ==============================================================
+    # ==========================================================
     # RANDOM
-    # ==============================================================
+    # ==========================================================
 
     def random_item(
         self,
         kind: str | None = None,
         provider: str | None = None,
-        exclude_titles: list[
-            str
-        ] | None = None,
-    ) -> dict[
-        str, Any
-    ] | None:
+        exclude_titles: list[str] | None = None,
+    ) -> dict[str, Any] | None:
 
         query = """
             SELECT *
@@ -2098,13 +1621,11 @@ class Library:
             WHERE 1=1
         """
 
-        params: list[
-            Any
-        ] = []
+        params: list[Any] = []
 
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
         # Kind
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
 
         normalized_kind = (
             kind.strip().lower()
@@ -2125,9 +1646,9 @@ class Library:
                 normalized_kind
             )
 
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
         # Provider
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
 
         if provider:
 
@@ -2135,7 +1656,10 @@ class Library:
                 provider.strip().casefold()
             )
 
-            if normalized_provider != "alle":
+            if (
+                normalized_provider
+                != "alle"
+            ):
 
                 if (
                     normalized_provider
@@ -2151,13 +1675,11 @@ class Library:
                     normalized_provider
                 )
 
-        # ----------------------------------------------------------
-        # Ausschlüsse
-        # ----------------------------------------------------------
+        # ------------------------------------------------------
+        # Exclude
+        # ------------------------------------------------------
 
-        excluded: list[
-            str
-        ] = []
+        excluded: list[str] = []
 
         for title in (
             exclude_titles or []
@@ -2172,7 +1694,6 @@ class Library:
                 continue
 
             if cleaned not in excluded:
-
                 excluded.append(
                     cleaned
                 )
@@ -2193,6 +1714,10 @@ class Library:
                 excluded
             )
 
+        # ------------------------------------------------------
+        # Random
+        # ------------------------------------------------------
+
         query += """
             ORDER BY RANDOM()
             LIMIT 1
@@ -2211,20 +1736,27 @@ class Library:
                 else None
             )
 
-    # ==============================================================
+    # ==========================================================
     # POSTER
-    # ==============================================================
+    # ==========================================================
 
     def poster_for_id(
         self,
         media_id: int,
     ) -> Path | None:
+        """
+        Liefert ausschließlich ein zuvor vom Scanner
+        bestätigtes lokales Poster.
+
+        Es gibt hier KEINE Möglichkeit, einen beliebigen
+        Dateipfad vom Client einzuschleusen.
+        """
 
         with self._connect() as db:
 
             row = db.execute(
                 """
-                SELECT poster_path, poster
+                SELECT poster_path
                 FROM media
                 WHERE id = ?
                 """,
@@ -2234,80 +1766,37 @@ class Library:
         if not row:
             return None
 
-        poster_path = row[
+        value = row[
             "poster_path"
         ]
 
-        # ----------------------------------------------------------
-        # 1. Bereits lokal gespeichert
-        # ----------------------------------------------------------
+        if not value:
+            return None
 
-        if poster_path:
+        try:
 
-            try:
+            path = Path(
+                value
+            ).resolve()
 
-                path = Path(
-                    poster_path
-                )
+            if not path.is_file():
+                return None
 
-                if path.is_file():
-
-                    return path
-
-            except OSError:
-                pass
-
-        # ----------------------------------------------------------
-        # 2. Falls alter DB-Eintrag noch keine lokale Kopie hat:
-        #    versuchen wir den NFO-Posterwert nachträglich zu laden.
-        # ----------------------------------------------------------
-
-        poster = row[
-            "poster"
-        ]
-
-        if poster:
-
-            if poster.casefold().startswith(
-                (
-                    "http://",
-                    "https://",
-                )
+            if (
+                path.suffix.lower()
+                not in POSTER_EXTENSIONS
             ):
+                return None
 
-                cached = (
-                    self._download_poster(
-                        poster
-                    )
-                )
+            return path
 
-                if cached:
+        except OSError:
 
-                    with self._connect() as db:
+            return None
 
-                        db.execute(
-                            """
-                            UPDATE media
-                            SET poster_path = ?,
-                                updated_at =
-                                    CURRENT_TIMESTAMP
-                            WHERE id = ?
-                            """,
-                            (
-                                str(
-                                    cached
-                                ),
-                                media_id,
-                            ),
-                        )
-
-                    return cached
-
-        return None
-
-    # ==============================================================
+    # ==========================================================
     # STATS
-    # ==============================================================
+    # ==========================================================
 
     def stats(
         self,
@@ -2380,7 +1869,8 @@ class Library:
                             ),
                             2,
                         )
-                        if avg_rating is not None
+                        if avg_rating
+                        is not None
                         else None
                     ),
             }
