@@ -17,7 +17,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.security import get_current_user, User
+from app.security import get_current_user, create_default_admin
 from app.api.routes import router as api_router
 from app.rate_limit import limiter, rate_limiter_exception_handler
 from app.middleware import add_security_headers_fastapi
@@ -44,8 +44,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Media Roulette...")
     
     # Initialize security and create default admin
-    from app.security import init_default_admin
-    init_default_admin()
+    create_default_admin()
     
     # Initialize library scan on startup
     from app.api.routes import library
@@ -60,13 +59,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Media Roulette...")
 
-
 app = FastAPI(
     title="Media Roulette",
     description="Local random media recommendation service",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url=None,  # Disable Swagger in production
+    docs_url=None,
     redoc_url=None,
 )
 
@@ -95,12 +93,10 @@ app.include_router(api_router)
 BASE_DIR = Path(__file__).resolve().parents[1]
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def root(request: Request):
     """Main page"""
     return templates.TemplateResponse("index.html", {"request": request})
-
 
 @app.get("/health", tags=["Health"])
 async def health_check():
@@ -112,12 +108,10 @@ async def health_check():
         "service": "media-roulette"
     }
 
-
 @app.get("/login", response_class=HTMLResponse, tags=["Auth"])
 async def login_page(request: Request):
     """Login page"""
     return templates.TemplateResponse("login.html", {"request": request})
-
 
 @app.post("/logout", tags=["Auth"])
 async def logout(request: Request):
@@ -126,10 +120,8 @@ async def logout(request: Request):
     request.session.pop("token", None)
     return RedirectResponse(url="/login", status_code=303)
 
-
 # Export templates for other modules
 __all__ = ['app', 'templates']
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
