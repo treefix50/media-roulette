@@ -17,9 +17,10 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.security import init_security, get_current_user, User
+from app.security import get_current_user, User
 from app.api.routes import router as api_router
 from app.rate_limit import limiter, rate_limiter_exception_handler
+from app.middleware import add_security_headers_fastapi
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Global templates instance for routes module
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,6 +82,9 @@ trusted_hosts = os.environ.get("TRUSTED_HOSTS", "*")
 if trusted_hosts != "*" and trusted_hosts:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts.split(","))
 
+# Add security headers middleware
+app = add_security_headers_fastapi(app)
+
 # Rate limiting exception handler
 app.add_exception_handler(RateLimitExceeded, rate_limiter_exception_handler)
 
@@ -89,13 +95,10 @@ app.include_router(api_router)
 BASE_DIR = Path(__file__).resolve().parents[1]
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-# Templates
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-
 
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def root(request: Request):
-    """Main page - redirects to login if not authenticated"""
+    """Main page"""
     return templates.TemplateResponse("index.html", {"request": request})
 
 
@@ -122,6 +125,10 @@ async def logout(request: Request):
     request.session.pop("user_id", None)
     request.session.pop("token", None)
     return RedirectResponse(url="/login", status_code=303)
+
+
+# Export templates for other modules
+__all__ = ['app', 'templates']
 
 
 if __name__ == "__main__":
