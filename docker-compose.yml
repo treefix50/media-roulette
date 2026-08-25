@@ -4,9 +4,12 @@ services:
   media-roulette:
     build:
       context: .
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: media-roulette
     restart: unless-stopped
+    
+    ports:
+      - "8000:8000"
     
     # Security hardening
     security_opt:
@@ -38,12 +41,6 @@ services:
     
     networks:
       - proxy-network
-    
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.media-roulette.rule=Host(`your-domain.com`)"
-      - "traefik.http.routers.media-roulette.entrypoints=websecure"
-      - "traefik.http.routers.media-roulette.tls.certresolver=myresolver"
     
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
