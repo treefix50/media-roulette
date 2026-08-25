@@ -204,6 +204,17 @@ function createAbortSignal(timeoutMs) {
 async function fetchJson(url, options = {}) {
     const request = createAbortSignal(
         REQUEST_TIMEOUT_MS
+        // Get token from session storage
+    const token = sessionStorage.getItem('token');
+    
+    const headers = {
+        Accept: "application/json",
+        ...(options.headers || {})
+    };
+    
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
     );
 
     try {
