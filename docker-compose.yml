@@ -1,38 +1,57 @@
+version: '3.8'
+
 services:
   media-roulette:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
     container_name: media-roulette
-
-    network_mode: "bridge"
-
-    ports:
-      - "8000:8000"
-
-    environment:
-      MOVIES_DIR: /data/movies
-      SERIES_DIR: /data/series
-      DATABASE_PATH: /state/media-roulette.db
-      TZ: Europe/Berlin
-
-    volumes:
-      # Medien ausschließlich lesbar einbinden.
-      - /mnt/user/data/media/movies:/data/movies:ro
-      - /mnt/user/data/media/tv:/data/series:ro
-
-      # SQLite-Datenbank separat und dauerhaft speichern.
-      - /mnt/user/appdata/media-roulette/state:/state
-
     restart: unless-stopped
-
+    
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+      - /run:size=10M
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    
+    volumes:
+      - ./state:/state:rw
+      - /mnt/data/movies:/mnt/data/movies:ro
+      - /mnt/data/series:/mnt/data/series:ro
+    
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
+      - SECURITY_PASSWORD_SALT=${SECURITY_PASSWORD_SALT:?SECURITY_PASSWORD_SALT is required}
+      - DATABASE_URL=sqlite:///state/media_roulette.db
+      - SERVER_NAME=${SERVER_NAME:-}
+      - URL_SCHEME=https
+      - PORT=8000
+    
+    networks:
+      - proxy-network
+    
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.media-roulette.rule=Host(`your-domain.com`)"
+      - "traefik.http.routers.media-roulette.entrypoints=websecure"
+      - "traefik.http.routers.media-roulette.tls.certresolver=myresolver"
+    
     healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
-        ]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 40s
+
+networks:
+  proxy-network:
+    external: true
