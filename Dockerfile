@@ -15,12 +15,10 @@ WORKDIR /app
 
 # Install dependencies from wheel cache
 COPY --from=builder /tmp/wheels /tmp/wheels
-RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels -r /dev/null \
-    && rm -rf /tmp/wheels
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels -r requirements.txt
 
 # Copy application
 COPY --chown=appuser:appgroup app/ ./app/
-COPY --chown=appuser:appgroup requirements.txt .
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,8 +38,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run application
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", \
-     "--threads", "4", "--timeout", "30", "--keep-alive", "5", \
-     "--access-logfile", "-", "--error-logfile", "-", \
-     "app.main:create_app()"]
+# Run application with uvicorn (correct command)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
