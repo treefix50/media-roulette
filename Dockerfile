@@ -1,62 +1,47 @@
-FROM python:3.12-slim-bookworm
+# Multi-stage build for smaller production image
+FROM python:3.11-slim as builder
 
+WORKDIR /app
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /tmp/wheels -r requirements.txt
+
+# Production runtime image
+FROM python:3.11-slim
+
+# Create non-root user for security
+RUN groupadd -r appgroup && useradd -r -g appgroup -d /app -s /sbin/nologin appuser
 
 WORKDIR /app
 
+# Install dependencies from wheel cache
+COPY --from=builder /tmp/wheels /tmp/wheels
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheels -r /dev/null \
+    && rm -rf /tmp/wheels
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+# Copy application
+COPY --chown=appuser:appgroup app/ ./app/
+COPY --chown=appuser:appgroup requirements.txt .
 
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# ==============================================================
-# PYTHON DEPENDENCIES
-# ==============================================================
+# Set permissions
+RUN mkdir -p /state && chown -R appuser:appgroup /app /state
 
-COPY requirements.txt .
+# Switch to non-root user
+USER appuser
 
-
-RUN pip install \
-        --no-cache-dir \
-        -r requirements.txt \
-    && rm -rf /root/.cache/pip
-
-
-# ==============================================================
-# APPLICATION
-# ==============================================================
-
-COPY app/ ./app/
-
-
-# ==============================================================
-# STATE
-# ==============================================================
-
-RUN mkdir -p /state
-
-
-# ==============================================================
-# SECURITY
-# ==============================================================
-
-# Python erzeugt keine .pyc-Dateien.
-# /state wird nur für die SQLite-Datenbank verwendet.
-
-
+# Expose port
 EXPOSE 8000
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# ==============================================================
-# SERVER
-# ==============================================================
-
-CMD [
-    "uvicorn",
-    "app.main:app",
-    "--host",
-    "0.0.0.0",
-    "--port",
-    "8000",
-    "--proxy-headers"
-]
+# Run application
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", \
+     "--threads", "4", "--timeout", "30", "--keep-alive", "5", \
+     "--access-logfile", "-", "--error-logfile", "-", \
+     "app.main:create_app()"]
