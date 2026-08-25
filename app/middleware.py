@@ -1,17 +1,19 @@
 """
-Security middleware for Media Roulette
-Adds security headers, rate limiting, and request validation
+Security middleware for Media Roulette (FastAPI compatible)
+Adds security headers for all responses
 """
-from functools import wraps
-from flask import request, jsonify, abort
-import re
-from datetime import datetime
+from fastapi import FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
-def add_security_headers(app):
-    """Add security headers to all responses"""
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware to add security headers to all responses"""
     
-    @app.after_request
-    def after_request(response):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
         # Prevent clickjacking
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -23,7 +25,7 @@ def add_security_headers(app):
         # Permissions policy
         response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
         
-        # Content Security Policy (basic)
+        # Content Security Policy (basic - allows inline styles/scripts for templates)
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
         
         # Remove server identification
@@ -31,44 +33,13 @@ def add_security_headers(app):
         response.headers.pop('Server', None)
         
         # HTTPS enforcement in production
-        if app.config.get('FLASK_ENV') == 'production':
+        if os.environ.get('FLASK_ENV') == 'production':
             response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
         
         return response
-    
+
+
+def add_security_headers_fastapi(app: FastAPI) -> FastAPI:
+    """Add security headers middleware to FastAPI app"""
+    app.add_middleware(SecurityHeadersMiddleware)
     return app
-
-def validate_input(f):
-    """Validate user input for common injection attacks"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Check for SQL injection patterns in query params
-        dangerous_patterns = [
-            r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER)\b)",
-            r"(--|\#|\/\*)",
-            r"('|\"|;|\\)",
-        ]
-        
-        for pattern in dangerous_patterns:
-            for param in request.args.values():
-                if param and re.search(pattern, param, re.IGNORECASE):
-                    app.logger.warning(f"Suspicious input detected from {request.remote_addr}")
-                    abort(400)
-        
-        return f(*args, **kwargs)
-    return decorated_function
-
-def audit_log(app, event_type, details=None):
-    """Log security-relevant events"""
-    if not details:
-        details = {}
-    
-    log_entry = {
-        'timestamp': datetime.utcnow().isoformat(),
-        'event_type': event_type,
-        'ip': request.remote_addr,
-        'user_agent': request.user_agent.string,
-        'details': details
-    }
-    
-    app.logger.info(f"AUDIT: {log_entry}")
