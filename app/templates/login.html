@@ -3,42 +3,175 @@
 {% block title %}Login - Media Roulette{% endblock %}
 
 {% block content %}
-<div class="container mt-5">
-    <div class="row justify-content-center">
-        <div class="col-md-6 col-lg-4">
-            <div class="card shadow">
-                <div class="card-header text-center">
-                    <h4>🔐 Media Roulette Login</h4>
-                </div>
-                <div class="card-body">
-                    <form id="login-form">
-                        <div class="mb-3">
-                            <label for="email" class="form-label">Email Address</label>
-                            <input type="email" class="form-control" id="email" required>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="password" class="form-label">Password</label>
-                            <input type="password" class="form-control" id="password" required>
-                        </div>
-                        
-                        <button type="submit" class="btn btn-primary w-100">Sign In</button>
-                    </form>
-                </div>
-                <div class="card-footer text-muted text-center">
-                    <small>Protected area - unauthorized access is logged</small>
-                </div>
+<section class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <span class="login-icon" aria-hidden="true">🔐</span>
+            <h2>Media Roulette Login</h2>
+            <p class="login-subtitle">Bitte melde dich an um fortzufahren</p>
+        </div>
+
+        <form id="login-form" class="login-form">
+            <div class="form-group">
+                <label for="email">Email Adresse</label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    name="email"
+                    autocomplete="email"
+                    required 
+                />
             </div>
+
+            <div class="form-group">
+                <label for="password">Passwort</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    name="password"
+                    autocomplete="current-password"
+                    required 
+                />
+            </div>
+
+            <div id="login-error" class="error-message" style="display: none;"></div>
+
+            <button type="submit" class="btn-primary w-full">
+                Anmelden
+            </button>
+        </form>
+
+        <div class="login-footer">
+            <small>Protected area - unauthorized access is logged</small>
         </div>
     </div>
-</div>
+</section>
+
+<style>
+.login-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 120px);
+    padding: 24px;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    padding: 32px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.login-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 16px;
+    border-radius: 14px;
+    background: var(--accent-soft);
+    font-size: 1.8rem;
+}
+
+.login-header h2 {
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 1.6rem;
+}
+
+.login-subtitle {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.form-group label {
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.form-group input {
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 16px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-soft);
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.form-group input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(118, 87, 255, 0.18);
+}
+
+.error-message {
+    padding: 12px 16px;
+    border: 1px solid rgba(255, 100, 100, 0.25);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 100, 100, 0.08);
+    color: var(--danger);
+    font-size: 0.85rem;
+}
+
+.w-full {
+    width: 100%;
+}
+
+.login-footer {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+}
+
+.login-footer small {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+@media (max-width: 480px) {
+    .login-card {
+        padding: 24px;
+    }
+}
+</style>
 
 <script>
+"use strict";
+
 document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
+    const errorDiv = document.getElementById('login-error');
     
     try {
         const formData = new FormData();
@@ -52,16 +185,17 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         
         if (response.ok) {
             const data = await response.json();
-            // Store token in session storage
             sessionStorage.setItem('token', data.access_token);
-            // Reload page
             window.location.href = '/';
         } else {
-            alert('Login failed: ' + (await response.text()));
+            const errorText = await response.text();
+            errorDiv.textContent = 'Anmeldung fehlgeschlagen: ' + errorText;
+            errorDiv.style.display = 'block';
         }
     } catch (error) {
         console.error('Login error:', error);
-        alert('Connection error. Please try again.');
+        errorDiv.textContent = 'Verbindungsfehler. Bitte versuche es erneut.';
+        errorDiv.style.display = 'block';
     }
 });
 </script>
