@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "security/_macros.html" import render_field_with_errors, render_field %}
 
 {% block title %}Login - Media Roulette{% endblock %}
 
@@ -8,46 +7,62 @@
     <div class="row justify-content-center">
         <div class="col-md-6 col-lg-4">
             <div class="card shadow">
-                <div class="card-header bg-primary text-white text-center">
+                <div class="card-header text-center">
                     <h4>🔐 Media Roulette Login</h4>
                 </div>
                 <div class="card-body">
-                    {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        {% for category, message in messages %}
-                        <div class="alert alert-{{ 'danger' if category == 'error' else category }}">
-                            {{ message }}
-                        </div>
-                        {% endfor %}
-                    {% endif %}
-                    {% endwith %}
-                    
-                    <form method="POST" action="{{ url_for('security.login') }}">
-                        {{ form.hidden_tag() }}
-                        
+                    <form id="login-form">
                         <div class="mb-3">
-                            {{ render_field_with_errors(form.email, class="form-control", 
-                                placeholder="Email Address") }}
+                            <label for="email" class="form-label">Email Address</label>
+                            <input type="email" class="form-control" id="email" required>
                         </div>
                         
                         <div class="mb-3">
-                            {{ render_field_with_errors(form.password, class="form-control", 
-                                placeholder="Password", type="password") }}
-                        </div>
-                        
-                        <div class="mb-3">
-                            {{ render_field(form.remember, class="form-check-input") }}
-                            {{ form.remember.label(class="form-check-label") }}
+                            <label for="password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="password" required>
                         </div>
                         
                         <button type="submit" class="btn btn-primary w-100">Sign In</button>
                     </form>
                 </div>
                 <div class="card-footer text-muted text-center">
-                    <small>Protected area - unauthorized access is monitored</small>
+                    <small>Protected area - unauthorized access is logged</small>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    
+    try {
+        const formData = new FormData();
+        formData.append('username', email);
+        formData.append('password', password);
+        
+        const response = await fetch('/api/token', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            // Store token in session storage
+            sessionStorage.setItem('token', data.access_token);
+            // Reload page
+            window.location.href = '/';
+        } else {
+            alert('Login failed: ' + (await response.text()));
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        alert('Connection error. Please try again.');
+    }
+});
+</script>
 {% endblock %}
