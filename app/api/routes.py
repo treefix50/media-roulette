@@ -19,7 +19,6 @@ from fastapi.responses import (
 )
 from fastapi.security import OAuth2PasswordRequestForm
 from starlette.concurrency import run_in_threadpool
-from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
 from app.library import Library
@@ -31,8 +30,9 @@ from app.security import (
     create_access_token,
     Token,
     get_password_hash,
+    User,
+    Session,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -269,8 +269,3 @@ async def poster(media_id: int):
     except Exception as exc:
         logger.exception("Poster loading failed for media %s", media_id)
         raise HTTPException(status_code=404, detail="Poster not available") from exc
-
-@router.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    """Home page"""
-    return templates.TemplateResponse(request=request, name="index.html", context={"request": request})
