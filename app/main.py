@@ -1,86 +1,139 @@
 """
-Media Roulette - Main Application Entry Point
-With Security Module Integration
+Media Roulette - FastAPI Application Entry Point
+Secure production-ready configuration
 """
 import os
 import logging
-from flask import Flask, redirect, url_for
-from flask_sqlalchemy import SQLAlchemy
+from pathlib import Path
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-# Initialize extensions
-db = SQLAlchemy()
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, RedirectResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-def create_app():
-    """Application factory for Flask"""
-    app = Flask(__name__)
-    
-    # ==================== CONFIGURATION ====================
-    # Load from environment with secure defaults
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 
-                               os.urandom(32).hex())
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-        'DATABASE_URL', 'sqlite:///state/media_roulette.db')
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['FLASK_ENV'] = os.environ.get('FLASK_ENV', 'development')
-    
-    # Security configuration will be overridden by security module
-    app.config['SESSION_COOKIE_SECURE'] = app.config['FLASK_ENV'] == 'production'
-    app.config['SESSION_COOKIE_HTTPONLY'] = True
-    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-    
-    # CORS settings for reverse proxy
-    app.config['SERVER_NAME'] = os.environ.get('SERVER_NAME', None)
-    app.config['PREFERRED_URL_SCHEME'] = os.environ.get('URL_SCHEME', 'https')
-    
-    # ==================== INITIALIZATION ====================
-    # Initialize database
-    db.init_app(app)
-    
-    # Import and initialize security
-    from app.security import init_security
-    security, user_datastore = init_security(app, db)
-    
-    # Add route protection decorator
-    from flask_security.utils import login_required
-    
-    # ==================== LOGGING ====================
-    if app.config['FLASK_ENV'] == 'production':
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler('/state/app.log'),
-                logging.StreamHandler()
-            ]
-        )
-    
-    # ==================== ROUTES ====================
-    @app.route('/')
-    def index():
-        """Home page with redirect to authenticated areas"""
-        return redirect(url_for('login'))
-    
-    @app.route('/health')
-    def health_check():
-        """Health check endpoint for load balancers/proxies"""
-        from datetime import datetime
-        return {
-            'status': 'healthy',
-            'timestamp': datetime.utcnow().isoformat(),
-            'version': '1.0.0',
-            'authenticated': False
-        }, 200
-    
-    # Import routes after app creation
-    from app.routes import register_routes
-    register_routes(app, db, user_datastore)
-    
-    return app
+from app.security import init_security, get_current_user, User
+from app.api.routes import router as api_router
+from app.rate_limit import limiter, rate_limiter_exception_handler
 
-# Create application instance
-app = create_app()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('/state/app.log')
+    ]
+)
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    debug = os.environ.get('FLASK_ENV', 'development') != 'production'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events"""
+    # Startup
+    logger.info("Starting Media Roulette...")
+    
+    # Initialize security and create default admin
+    from app.security import init_default_admin
+    init_default_admin()
+    
+    # Initialize library scan on startup
+    from app.api.routes import library
+    try:
+        count = library.scan()
+        logger.info(f"Initial library scan complete: {count} items")
+    except Exception as e:
+        logger.error(f"Initial library scan failed: {e}")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down Media Roulette...")
+
+
+app = FastAPI(
+    title="Media Roulette",
+    description="Local random media recommendation service",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,  # Disable Swagger in production
+    redoc_url=None,
+)
+
+# Security middleware
+app.state.limiter = limiter
+
+# Add session support (for template rendering)
+secret_key = os.environ.get("SECRET_KEY", os.urandom(32).hex())
+app.add_middleware(SessionMiddleware, secret_key=secret_key)
+
+# Add trusted host middleware in production
+trusted_hosts = os.environ.get("TRUSTED_HOSTS", "*")
+if trusted_hosts != "*" and trusted_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts.split(","))
+
+# Rate limiting exception handler
+app.add_exception_handler(RateLimitExceeded, rate_limiter_exception_handler)
+
+# Include API router
+app.include_router(api_router)
+
+# Mount static files
+BASE_DIR = Path(__file__).resolve().parents[1]
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+# Templates
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+@app.get("/", response_class=HTMLResponse, tags=["UI"])
+async def root(request: Request):
+    """Main page - redirects to login if not authenticated"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Public health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": "1.0.0",
+        "service": "media-roulette"
+    }
+
+
+@app.get("/login", response_class=HTMLResponse, tags=["Auth"])
+async def login_page(request: Request):
+    """Login page"""
+    return templates.TemplateResponse("login.html", {"request": request})
+
+
+@app.post("/logout", tags=["Auth"])
+async def logout(request: Request):
+    """Logout - clears session"""
+    request.session.pop("user_id", None)
+    request.session.pop("token", None)
+    return RedirectResponse(url="/login", status_code=303)
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    host = os.environ.get("HOST", "0.0.0.0")
+    debug = os.environ.get("DEBUG", "false").lower() == "true"
+    
+    import uvicorn
+    uvicorn.run(
+        "app.main:app",
+        host=host,
+        port=port,
+        reload=debug,
+        workers=2 if not debug else 1,
+    )
