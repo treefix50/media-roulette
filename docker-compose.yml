@@ -1,57 +1,54 @@
-version: '3.8'
-
 services:
   media-roulette:
+    container_name: media-roulette
+
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: media-roulette
+
     restart: unless-stopped
-    
+
     ports:
       - "8000:8000"
-    
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp:size=100M
-      - /run:size=10M
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-    
-    volumes:
-      - ./state:/state:rw
-      - /mnt/data/movies:/mnt/data/movies:ro
-      - /mnt/data/series:/mnt/data/series:ro
-    
+
     environment:
-      - FLASK_ENV=${FLASK_ENV:-production}
-      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@localhost}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-ChangeMeNow123!}
-      - DATABASE_PATH=/state/media_roulette.db
-      - MOVIES_DIR=/data/movies
-      - SERIES_DIR=/data/series
-      - SERVER_NAME=${SERVER_NAME:-}
-      - URL_SCHEME=https
-      - PORT=8000
-    
-    networks:
-      - proxy-network
-    
+      TZ: Europe/Zurich
+
+      # Media-Roulette paths inside the container
+      MOVIES_DIR: /data/movies
+      SERIES_DIR: /data/tv
+
+      # Persistent SQLite database
+      DATABASE_PATH: /state/media_roulette.db
+
+      # Application logging
+      LOG_LEVEL: INFO
+
+    volumes:
+      # --------------------------------------------------------
+      # Media library
+      # Read-only: Media-Roulette must never modify your media.
+      # --------------------------------------------------------
+
+      - /mnt/user/data/media/movies:/data/movies:ro
+      - /mnt/user/data/media/tv:/data/tv:ro
+
+      # --------------------------------------------------------
+      # Application state
+      # SQLite database / persistent application data
+      # --------------------------------------------------------
+
+      - ./data:/state
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/test', timeout=5)"
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-
-networks:
-  proxy-network:
-    external: true
-    name: proxy-network
+      start_period: 20s
