@@ -57,7 +57,6 @@ POSTER_EXTENSIONS = {
     ".webp",
 }
 
-
 POSTER_FILENAMES = (
     "poster.jpg",
     "poster.jpeg",
@@ -223,16 +222,16 @@ def parse_nfo(
     #     <poster>poster.jpg</poster>
     # </art>
     #
-    # Auch Remote-URLs werden zunächst gespeichert.
-    # Die lokale Posterauflösung entscheidet später, ob daraus
-    # eine lokale Datei wird.
+    # Remote-URLs werden zunächst gespeichert.
+    # Die lokale Posterauflösung entscheidet später,
+    # ob daraus eine lokale Datei wird.
     # ----------------------------------------------------------
 
     poster: str | None = None
 
     # 1. Expliziter Poster-Thumb
-    for thumb in root.findall("thumb"):
 
+    for thumb in root.findall("thumb"):
         aspect = (
             thumb.attrib.get("aspect") or ""
         ).strip().casefold()
@@ -247,12 +246,11 @@ def parse_nfo(
             break
 
     # 2. <art><poster>
-    if not poster:
 
+    if not poster:
         art = root.find("art")
 
         if art is not None:
-
             poster_node = art.find("poster")
 
             if poster_node is not None:
@@ -262,10 +260,9 @@ def parse_nfo(
 
     # 3. Falls kein aspect gesetzt ist,
     #    ersten brauchbaren Thumb verwenden.
+
     if not poster:
-
         for thumb in root.findall("thumb"):
-
             value = _clean(
                 thumb.text
             )
@@ -286,7 +283,6 @@ def parse_nfo(
     )
 
     if rating is not None:
-
         # Manche NFOs verwenden 0-5.
         if 0 < rating <= 5:
             rating *= 2
@@ -301,21 +297,28 @@ def parse_nfo(
     # ----------------------------------------------------------
     # RUNTIME
     # ----------------------------------------------------------
+    #
+    # Kodi-/Media-NFOs verwenden Runtime normalerweise
+    # in Minuten. Ein Wert wie 90 bedeutet daher 90 Minuten
+    # und NICHT 90 Stunden.
+    #
+    # Die bisherige automatische Umwandlung aller Werte < 100
+    # in Stunden führte bei normalen Laufzeiten zu falschen
+    # Werten, z. B.:
+    #
+    #     90  -> 5400 Minuten
+    #
+    # Das wird bewusst nicht mehr gemacht.
+    # ----------------------------------------------------------
 
     runtime = _parse_number(
         data.get("runtime")
     )
 
     if runtime is not None:
-
         runtime = int(
             round(runtime)
         )
-
-        # Historisch unterstützen wir NFOs,
-        # die Stunden statt Minuten enthalten.
-        if 0 < runtime < 100:
-            runtime *= 60
 
         runtime = max(
             1,
@@ -331,7 +334,6 @@ def parse_nfo(
     year = data.get("year")
 
     if year:
-
         match = re.search(
             r"(19\d{2}|20\d{2})",
             str(year),
@@ -384,7 +386,6 @@ def parse_name(
     )
 
     if match:
-
         text = text[
             :match.start()
         ].strip(
@@ -460,8 +461,6 @@ class Library:
         self._scan_lock = threading.Lock()
 
         self._init_db()
-
-        # Datenbankdatei möglichst restriktiv absichern.
         self._secure_database_permissions()
 
     # ==========================================================
@@ -515,7 +514,6 @@ class Library:
         """
 
         try:
-
             if not root_dir.exists():
                 return None
 
@@ -527,7 +525,6 @@ class Library:
             ] = []
 
             for child in root_dir.iterdir():
-
                 if not child.is_dir():
                     continue
 
@@ -538,12 +535,10 @@ class Library:
                 )
 
                 if provider is None:
-
                     logger.debug(
                         "Ignoring unsupported provider directory: %s",
                         child,
                     )
-
                     continue
 
                 result.append(
@@ -561,7 +556,6 @@ class Library:
             return result
 
         except OSError:
-
             logger.exception(
                 "Unable to read provider directory: %s",
                 root_dir,
@@ -576,7 +570,6 @@ class Library:
     def _connect(
         self,
     ) -> sqlite3.Connection:
-
         self.db_path.parent.mkdir(
             parents=True,
             exist_ok=True,
@@ -613,24 +606,18 @@ class Library:
         """
         Versucht die SQLite-Datei auf 0600 zu setzen.
 
-        Damit kann unter Linux nur der Besitzer der Datei
-        lesen und schreiben.
-
         Falls das Dateisystem chmod nicht unterstützt oder
         die Datei noch nicht existiert, wird der Fehler nicht
         zum Scan-Abbruch.
         """
 
         try:
-
             if self.db_path.exists():
-
                 self.db_path.chmod(
                     0o600
                 )
 
         except OSError:
-
             logger.warning(
                 "Unable to restrict database permissions: %s",
                 self.db_path,
@@ -639,9 +626,7 @@ class Library:
     def _init_db(
         self,
     ) -> None:
-
         with self._connect() as db:
-
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS media (
@@ -695,9 +680,7 @@ class Library:
                 column,
                 statement,
             ) in migrations.items():
-
                 if column not in columns:
-
                     db.execute(
                         statement
                     )
@@ -752,9 +735,7 @@ class Library:
     def _iter_dirs(
         path: Path,
     ) -> list[Path] | None:
-
         try:
-
             if not path.exists():
                 return None
 
@@ -772,7 +753,6 @@ class Library:
             )
 
         except OSError:
-
             logger.exception(
                 "Unable to read directory: %s",
                 path,
@@ -785,13 +765,11 @@ class Library:
         directory: Path,
         preferred_name: str,
     ) -> Path | None:
-
         preferred = (
             directory / preferred_name
         )
 
         try:
-
             if preferred.is_file():
                 return preferred.resolve()
 
@@ -813,6 +791,11 @@ class Library:
             return nfos[0].resolve()
 
         except OSError:
+            logger.warning(
+                "Unable to read NFO directory: %s",
+                directory,
+            )
+
             return None
 
     @staticmethod
@@ -827,7 +810,6 @@ class Library:
         """
 
         try:
-
             videos = sorted(
                 (
                     path
@@ -847,13 +829,37 @@ class Library:
             )
 
         except OSError:
-
             logger.exception(
                 "Unable to scan videos: %s",
                 directory,
             )
 
             return None
+
+    @staticmethod
+    def _is_within_directory(
+        path: Path,
+        directory: Path,
+    ) -> bool:
+        """
+        Prüft, ob path tatsächlich innerhalb von directory liegt.
+
+        Damit können Poster aus NFO-Dateien nicht auf beliebige
+        Dateien außerhalb des jeweiligen Medienordners zeigen.
+        """
+
+        try:
+            path = path.resolve()
+            directory = directory.resolve()
+
+            path.relative_to(directory)
+            return True
+
+        except (
+            OSError,
+            ValueError,
+        ):
+            return False
 
     @staticmethod
     def _find_local_poster(
@@ -870,6 +876,9 @@ class Library:
 
         Remote-URLs werden NICHT als lokale Datei behandelt.
 
+        Poster aus NFOs dürfen nur innerhalb des jeweiligen
+        Medienordners liegen.
+
         Unterstützt:
 
             poster.jpg
@@ -877,7 +886,12 @@ class Library:
             poster.png
             poster.webp
 
-        sowie folder/cover/movie/tvshow.
+        sowie:
+
+            folder
+            cover
+            movie
+            tvshow
         """
 
         # ------------------------------------------------------
@@ -885,7 +899,6 @@ class Library:
         # ------------------------------------------------------
 
         if nfo_poster:
-
             value = nfo_poster.strip()
 
             # Remote-URL ist kein lokaler Pfad.
@@ -896,7 +909,7 @@ class Library:
             ):
                 return None
 
-            # file:// URLs unterstützen
+            # file:// URLs unterstützen.
             if value.lower().startswith(
                 "file://"
             ):
@@ -912,10 +925,19 @@ class Library:
                 )
 
             try:
-
                 candidate = (
                     candidate.resolve()
                 )
+
+                if not Library._is_within_directory(
+                    candidate,
+                    directory,
+                ):
+                    logger.warning(
+                        "Ignoring poster outside media directory: %s",
+                        candidate,
+                    )
+                    return None
 
                 if (
                     candidate.is_file()
@@ -932,13 +954,11 @@ class Library:
         # ------------------------------------------------------
 
         for filename in POSTER_FILENAMES:
-
             candidate = (
                 directory / filename
             )
 
             try:
-
                 if (
                     candidate.is_file()
                     and candidate.suffix.lower()
@@ -963,7 +983,6 @@ class Library:
         media_dir: Path,
         preferred_nfo: str,
     ) -> dict[str, Any] | None:
-
         normalized_provider = (
             self._normalize_provider(
                 provider
@@ -1000,7 +1019,6 @@ class Library:
         )
 
         if not title:
-
             title, name_year = (
                 parse_name(
                     media_dir.name
@@ -1030,12 +1048,10 @@ class Library:
         # ------------------------------------------------------
 
         if kind == "series":
-
             # Serie selbst ist der DB-Eintrag.
             media_path = media_dir
 
         else:
-
             # Film verweist auf die tatsächliche Videodatei.
             media_path = first_video
 
@@ -1044,22 +1060,18 @@ class Library:
         # ------------------------------------------------------
 
         try:
-
             resolved_media_path = (
                 media_path.resolve()
             )
 
         except OSError:
-
             logger.warning(
                 "Unable to resolve media path: %s",
                 media_path,
             )
-
             return None
 
         try:
-
             resolved_nfo_path = (
                 nfo.resolve()
                 if nfo
@@ -1067,11 +1079,9 @@ class Library:
             )
 
         except OSError:
-
             resolved_nfo_path = None
 
         try:
-
             resolved_poster_path = (
                 poster_path.resolve()
                 if poster_path
@@ -1079,7 +1089,6 @@ class Library:
             )
 
         except OSError:
-
             resolved_poster_path = None
 
         # ------------------------------------------------------
@@ -1087,7 +1096,6 @@ class Library:
         # ------------------------------------------------------
 
         if resolved_poster_path:
-
             logger.debug(
                 "Poster found: %s -> %s",
                 media_dir,
@@ -1095,7 +1103,6 @@ class Library:
             )
 
         else:
-
             logger.debug(
                 "No local poster found: %s",
                 media_dir,
@@ -1103,59 +1110,33 @@ class Library:
 
         return {
             "kind": kind,
-
-            "provider":
-                normalized_provider,
-
-            "title":
-                title or media_dir.name,
-
-            "year":
-                year,
-
-            "plot":
-                data.get("plot"),
-
-            "genres":
-                data.get("genres"),
-
-            "rating":
-                data.get("rating"),
-
-            "runtime":
-                data.get("runtime"),
-
-            "path":
+            "provider": normalized_provider,
+            "title": title or media_dir.name,
+            "year": year,
+            "plot": data.get("plot"),
+            "genres": data.get("genres"),
+            "rating": data.get("rating"),
+            "runtime": data.get("runtime"),
+            "path": str(
+                resolved_media_path
+            ),
+            "nfo_path": (
                 str(
-                    resolved_media_path
-                ),
-
-            "nfo_path":
-                (
-                    str(
-                        resolved_nfo_path
-                    )
-                    if resolved_nfo_path
-                    else None
-                ),
-
-            "tmdbid":
-                data.get("tmdbid"),
-
-            "imdbid":
-                data.get("imdbid"),
-
-            "poster":
-                data.get("poster"),
-
-            "poster_path":
-                (
-                    str(
-                        resolved_poster_path
-                    )
-                    if resolved_poster_path
-                    else None
-                ),
+                    resolved_nfo_path
+                )
+                if resolved_nfo_path
+                else None
+            ),
+            "tmdbid": data.get("tmdbid"),
+            "imdbid": data.get("imdbid"),
+            "poster": data.get("poster"),
+            "poster_path": (
+                str(
+                    resolved_poster_path
+                )
+                if resolved_poster_path
+                else None
+            ),
         }
 
     # ==========================================================
@@ -1189,7 +1170,6 @@ class Library:
             provider,
             provider_dir,
         ) in provider_dirs:
-
             movie_dirs = (
                 self._iter_dirs(
                     provider_dir
@@ -1197,12 +1177,10 @@ class Library:
             )
 
             if movie_dirs is None:
-
                 logger.warning(
                     "Unable to read movie provider: %s",
                     provider_dir,
                 )
-
                 continue
 
             logger.debug(
@@ -1211,7 +1189,6 @@ class Library:
             )
 
             for movie_dir in movie_dirs:
-
                 item = self._build_item(
                     kind="movie",
                     provider=provider,
@@ -1271,7 +1248,6 @@ class Library:
             provider,
             provider_dir,
         ) in provider_dirs:
-
             series_dirs = (
                 self._iter_dirs(
                     provider_dir
@@ -1279,12 +1255,10 @@ class Library:
             )
 
             if series_dirs is None:
-
                 logger.warning(
                     "Unable to read series provider: %s",
                     provider_dir,
                 )
-
                 continue
 
             logger.debug(
@@ -1293,7 +1267,6 @@ class Library:
             )
 
             for series_dir in series_dirs:
-
                 logger.debug(
                     "Scanning series: %s/%s",
                     provider,
@@ -1328,9 +1301,7 @@ class Library:
         db: sqlite3.Connection,
         items: list[dict[str, Any]],
     ) -> None:
-
         for item in items:
-
             db.execute(
                 """
                 INSERT INTO media (
@@ -1412,16 +1383,25 @@ class Library:
         root_dir: Path,
         items: list[dict[str, Any]],
     ) -> None:
+        """
+        Entfernt nur Datensätze, die innerhalb des tatsächlich
+        gescannten Root-Verzeichnisses liegen und beim aktuellen
+        Scan nicht mehr gefunden wurden.
+
+        Der Vergleich erfolgt bewusst nicht über GLOB, weil
+        Sonderzeichen wie '[' oder '*' in realen Dateipfaden
+        bei GLOB als Pattern-Zeichen interpretiert werden können.
+        """
 
         try:
-
-            root = (
-                root_dir.resolve()
-            )
+            root = root_dir.resolve()
 
         except OSError:
-
             return
+
+        root_string = str(
+            root
+        )
 
         current_paths = {
             str(
@@ -1445,7 +1425,6 @@ class Library:
         )
 
         if current_paths:
-
             db.executemany(
                 """
                 INSERT OR IGNORE INTO scan_paths(path)
@@ -1453,22 +1432,36 @@ class Library:
                 """,
                 (
                     (path,)
-                    for path
-                    in current_paths
+                    for path in current_paths
                 ),
             )
 
+        # Ein Pfad gehört zum Root, wenn er entweder exakt dem
+        # Root entspricht oder mit "root/" beginnt.
+        #
+        # Medienpfade selbst liegen normalerweise tiefer als der
+        # Root. Die Prüfung über substr() vermeidet dabei LIKE-
+        # und GLOB-Sonderzeichen vollständig.
         db.execute(
             """
             DELETE FROM media
-            WHERE path GLOB ?
-              AND path NOT IN (
-                  SELECT path
-                  FROM scan_paths
-              )
+            WHERE (
+                path = ?
+                OR substr(
+                    path,
+                    1,
+                    length(?) + 1
+                ) = ? || '/'
+            )
+            AND path NOT IN (
+                SELECT path
+                FROM scan_paths
+            )
             """,
             (
-                f"{root}/*",
+                root_string,
+                root_string,
+                root_string,
             ),
         )
 
@@ -1479,7 +1472,6 @@ class Library:
     def scan(
         self,
     ) -> int:
-
         if not self._scan_lock.acquire(
             blocking=False
         ):
@@ -1488,7 +1480,6 @@ class Library:
             ]
 
         try:
-
             movie_items = (
                 self._scan_movies(
                     self.movies_dir
@@ -1502,7 +1493,6 @@ class Library:
             )
 
             with self._connect() as db:
-
                 db.execute(
                     "BEGIN"
                 )
@@ -1512,7 +1502,6 @@ class Library:
                 # ------------------------------------------------
 
                 if movie_items is not None:
-
                     self._upsert_items(
                         db,
                         movie_items,
@@ -1525,7 +1514,6 @@ class Library:
                     )
 
                 else:
-
                     logger.warning(
                         "Movie directory unavailable. "
                         "Existing movie records preserved."
@@ -1536,7 +1524,6 @@ class Library:
                 # ------------------------------------------------
 
                 if series_items is not None:
-
                     self._upsert_items(
                         db,
                         series_items,
@@ -1549,7 +1536,6 @@ class Library:
                     )
 
                 else:
-
                     logger.warning(
                         "Series directory unavailable. "
                         "Existing series records preserved."
@@ -1593,7 +1579,6 @@ class Library:
                 return int(total)
 
         except Exception:
-
             logger.exception(
                 "Library scan failed."
             )
@@ -1601,7 +1586,6 @@ class Library:
             raise
 
         finally:
-
             self._scan_lock.release()
 
     # ==========================================================
@@ -1614,7 +1598,6 @@ class Library:
         provider: str | None = None,
         exclude_titles: list[str] | None = None,
     ) -> dict[str, Any] | None:
-
         query = """
             SELECT *
             FROM media
@@ -1637,7 +1620,6 @@ class Library:
             "movie",
             "series",
         }:
-
             query += """
                 AND kind = ?
             """
@@ -1651,20 +1633,12 @@ class Library:
         # ------------------------------------------------------
 
         if provider:
-
             normalized_provider = (
                 provider.strip().casefold()
             )
 
-            if (
-                normalized_provider
-                != "alle"
-            ):
-
-                if (
-                    normalized_provider
-                    not in PROVIDERS
-                ):
+            if normalized_provider != "alle":
+                if normalized_provider not in PROVIDERS:
                     return None
 
                 query += """
@@ -1684,7 +1658,6 @@ class Library:
         for title in (
             exclude_titles or []
         ):
-
             if not title:
                 continue
 
@@ -1699,7 +1672,6 @@ class Library:
                 )
 
         if excluded:
-
             placeholders = ",".join(
                 "?"
                 for _ in excluded
@@ -1724,7 +1696,6 @@ class Library:
         """
 
         with self._connect() as db:
-
             row = db.execute(
                 query,
                 params,
@@ -1753,10 +1724,11 @@ class Library:
         """
 
         with self._connect() as db:
-
             row = db.execute(
                 """
-                SELECT poster_path
+                SELECT
+                    poster_path,
+                    path
                 FROM media
                 WHERE id = ?
                 """,
@@ -1774,25 +1746,62 @@ class Library:
             return None
 
         try:
-
             path = Path(
                 value
             ).resolve()
 
-            if not path.is_file():
-                return None
+        except OSError:
+            return None
 
-            if (
-                path.suffix.lower()
-                not in POSTER_EXTENSIONS
-            ):
-                return None
+        if not path.is_file():
+            return None
 
-            return path
+        if (
+            path.suffix.lower()
+            not in POSTER_EXTENSIONS
+        ):
+            return None
+
+        # Zusätzliche Sicherheitsprüfung:
+        # Das Poster muss innerhalb des zugehörigen
+        # Medienpfades liegen.
+
+        media_path_value = row[
+            "path"
+        ]
+
+        if not media_path_value:
+            return None
+
+        try:
+            media_path = Path(
+                media_path_value
+            ).resolve()
 
         except OSError:
-
             return None
+
+        # Bei Filmen zeigt "path" auf die Videodatei.
+        # Bei Serien zeigt "path" auf den Serienordner.
+        #
+        # Für Filme ist daher der Parent des Videopfades
+        # die relevante Posterbasis. Für Serien der Ordner
+        # selbst.
+
+        if media_path.is_file():
+            media_directory = (
+                media_path.parent
+            )
+        else:
+            media_directory = media_path
+
+        if not self._is_within_directory(
+            path,
+            media_directory,
+        ):
+            return None
+
+        return path
 
     # ==========================================================
     # STATS
@@ -1801,9 +1810,7 @@ class Library:
     def stats(
         self,
     ) -> dict[str, Any]:
-
         with self._connect() as db:
-
             total = db.execute(
                 """
                 SELECT COUNT(*)
@@ -1849,28 +1856,18 @@ class Library:
             ]
 
             return {
-                "total":
-                    int(total),
-
-                "movies":
-                    int(movies),
-
-                "series":
-                    int(series),
-
-                "providers":
-                    providers,
-
-                "avg_rating":
-                    (
-                        round(
-                            float(
-                                avg_rating
-                            ),
-                            2,
-                        )
-                        if avg_rating
-                        is not None
-                        else None
-                    ),
+                "total": int(total),
+                "movies": int(movies),
+                "series": int(series),
+                "providers": providers,
+                "avg_rating": (
+                    round(
+                        float(
+                            avg_rating
+                        ),
+                        2,
+                    )
+                    if avg_rating is not None
+                    else None
+                ),
             }
