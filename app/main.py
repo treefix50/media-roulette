@@ -1,127 +1,51 @@
 """
 Media Roulette - FastAPI application entry point.
 
-The application is designed to run behind a reverse proxy such as Zoraxy.
-TLS/HTTPS termination is expected to happen at the reverse proxy.
+Deployment model:
 
-Important deployment assumptions:
+```
+Internet
+    |
+  Zoraxy
+    |
+Media Roulette / Uvicorn
+```
 
-* The application itself listens on HTTP.
-* The media directories are mounted read-only.
-* Persistent application state is stored below /state.
-* Only one application process should perform the startup library scan.
-* Authentication is handled by app.security.
-  """
+Zoraxy terminates TLS and forwards HTTP traffic to this application.
+
+Application responsibilities:
+
+* session authentication
+* CSRF protection
+* security headers
+* static files
+* HTML templates
+* API routing
+* health endpoint
+
+The application does NOT expose or trust arbitrary forwarded headers.
+"""
 
 from **future** import annotations
 
 import logging
 import os
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+import secrets
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-from slowapi.errors import RateLimitExceeded
 
+from app.api.routes import router
+from app.library import init_db
 from app.middleware import add_security_headers_fastapi
-from app.rate_limit import limiter, rate_limiter_exception_handler
-
-# ============================================================================
-
-# PATHS
-
-# ============================================================================
-
-APP_DIR = Path(**file**).resolve().parent
-TEMPLATES_DIR = APP_DIR / "templates"
-STATIC_DIR = APP_DIR / "static"
-
-# ============================================================================
-
-# CONFIGURATION
-
-# ============================================================================
-
-HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", "8000"))
-
-ENVIRONMENT = os.getenv("ENVIRONMENT", "production").strip().lower()
-
-# The application must not silently start with a known/default session secret.
-
-SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
-
-if not SECRET_KEY:
-raise RuntimeError(
-"SECRET_KEY is not configured. "
-"Generate a long random secret and set SECRET_KEY in the environment."
-)
-
-if len(SECRET_KEY) < 32:
-raise RuntimeError(
-"SECRET_KEY is too short. "
-"Use a random secret with at least 32 characters."
-)
-
-# TrustedHostMiddleware is important when the application is reachable
-
-# through a reverse proxy. The value may contain a comma-separated list:
-
-#
-
-# media.example.com,localhost,127.0.0.1
-
-#
-
-# "*" disables host validation and is therefore not recommended for
-
-# production deployments.
-
-TRUSTED_HOSTS_RAW = os.getenv(
-"TRUSTED_HOSTS",
-"localhost,127.0.0.1",
-).strip()
-
-TRUSTED_HOSTS = [
-host.strip()
-for host in TRUSTED_HOSTS_RAW.split(",")
-if host.strip()
-]
-
-if not TRUSTED_HOSTS:
-raise RuntimeError(
-"TRUSTED_HOSTS must contain at least one hostname."
-)
-
-# Session settings.
-
-#
-
-# HTTPS is normally terminated by Zoraxy. The application receives the
-
-# forwarded request after the proxy. The authentication implementation
-
-# itself is responsible for its cookie configuration.
-
-SESSION_MAX_AGE = int(
-os.getenv("SESSION_MAX_AGE", str(60 * 60 * 24))
-)
-
-SESSION_SAME_SITE = os.getenv(
-"SESSION_SAME_SITE",
-"lax",
-).strip().lower()
-
-if SESSION_SAME_SITE not in {"lax", "strict", "none"}:
-raise RuntimeError(
-"SESSION_SAME_SITE must be one of: lax, strict, none."
+from app.rate_limit import (
+ClientIPMiddleware,
+enforce_api_rate_limit,
 )
 
 # ============================================================================
@@ -130,106 +54,174 @@ raise RuntimeError(
 
 # ============================================================================
 
-# Docker/Unraid deployments should log to stdout/stderr instead of maintaining
-
-# an application-specific log file inside the container.
+LOG_LEVEL = os.getenv(
+"LOG_LEVEL",
+"INFO",
+).strip().upper()
 
 logging.basicConfig(
-level=os.getenv("LOG_LEVEL", "INFO").upper(),
-format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-handlers=[
-logging.StreamHandler(),
-],
-force=True,
+level=getattr(
+logging,
+LOG_LEVEL,
+logging.INFO,
+),
+format=(
+"%(asctime)s "
+"%(levelname)s "
+"%(name)s "
+"%(message)s"
+),
 )
 
-logger = logging.getLogger("media_roulette")
+logger = logging.getLogger(
+"media_roulette"
+)
 
 # ============================================================================
 
-# TEMPLATES
+# PATHS
 
 # ============================================================================
+
+BASE_DIR = Path(
+**file**
+).resolve().parent
+
+PROJECT_ROOT = BASE_DIR.parent
+
+TEMPLATES_DIR = Path(
+os.getenv(
+"TEMPLATES_DIR",
+str(
+BASE_DIR / "templates"
+),
+)
+).expanduser()
+
+STATIC_DIR = Path(
+os.getenv(
+"STATIC_DIR",
+str(
+BASE_DIR / "static"
+),
+)
+).expanduser()
+
+# ============================================================================
+
+# ENVIRONMENT
+
+# ============================================================================
+
+ENVIRONMENT = os.getenv(
+"ENVIRONMENT",
+"production",
+).strip().lower()
+
+PUBLIC_HOST = os.getenv(
+"PUBLIC_HOST",
+"",
+).strip()
+
+PUBLIC_SCHEME = os.getenv(
+"PUBLIC_SCHEME",
+"https" if ENVIRONMENT == "production" else "http",
+).strip().lower()
+
+SESSION_SECRET = os.getenv(
+"SESSION_SECRET",
+"",
+)
+
+# Optional trusted proxy addresses.
+
+# Example:
+
+#
+
+# TRUSTED_PROXY_IPS=172.18.0.2,172.18.0.3
+
+#
+
+# Never use "*" here.
+
+TRUSTED_PROXY_IPS = {
+value.strip()
+for value in os.getenv(
+"TRUSTED_PROXY_IPS",
+"",
+).split(",")
+if value.strip()
+}
+
+# ============================================================================
+
+# STARTUP VALIDATION
+
+# ============================================================================
+
+def _validate_configuration() -> None:
+"""
+Validate configuration that is unsafe to guess.
+
+```
+Production deployments must provide a persistent session secret.
+"""
+
+if ENVIRONMENT == "production":
+
+    if not SESSION_SECRET:
+        raise RuntimeError(
+            "SESSION_SECRET must be set in production."
+        )
+
+    if len(SESSION_SECRET) < 32:
+        raise RuntimeError(
+            "SESSION_SECRET must contain at least 32 characters."
+        )
+
+    if PUBLIC_SCHEME != "https":
+        logger.warning(
+            "PUBLIC_SCHEME is not https in production. "
+            "HSTS will not be enabled."
+        )
 
 if not TEMPLATES_DIR.is_dir():
-raise RuntimeError(
-f"Template directory does not exist: {TEMPLATES_DIR}"
-)
+    raise RuntimeError(
+        f"Template directory does not exist: {TEMPLATES_DIR}"
+    )
 
 if not STATIC_DIR.is_dir():
-raise RuntimeError(
-f"Static directory does not exist: {STATIC_DIR}"
-)
-
-templates = Jinja2Templates(
-directory=str(TEMPLATES_DIR),
-)
-
-# ============================================================================
-
-# APPLICATION LIFESPAN
-
-# ============================================================================
-
-@asynccontextmanager
-async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-"""
-Application startup/shutdown lifecycle.
-
-```
-The library scan is deliberately executed once during application startup.
-The container deployment must use a single application worker. Running
-multiple independent workers would otherwise perform the scan once per
-process.
-"""
-
-logger.info(
-    "Starting Media Roulette "
-    "(environment=%s, host=%s, port=%s)",
-    ENVIRONMENT,
-    HOST,
-    PORT,
-)
-
-# Import here to avoid unnecessary import-time initialization and to keep
-# the application object independent from the library scanner.
-from app.api.routes import library
-from app.security import create_default_admin
-
-try:
-    create_default_admin()
-except Exception:
-    logger.exception("Security initialization failed")
-    raise
-
-try:
-    count = library.scan()
-    logger.info(
-        "Initial library scan complete: %s media items",
-        count,
+    raise RuntimeError(
+        f"Static directory does not exist: {STATIC_DIR}"
     )
-except Exception:
-    # A library scan failure should not necessarily make the web
-    # application unavailable. The existing database remains usable and
-    # the scan can be triggered again through the authenticated API.
-    logger.exception("Initial library scan failed")
-
-yield
-
-logger.info("Shutting down Media Roulette...")
 ```
+
+_validate_configuration()
 
 # ============================================================================
 
-# FASTAPI APPLICATION
+# DATABASE
+
+# ============================================================================
+
+init_db()
+
+# ============================================================================
+
+# FASTAPI APP
 
 # ============================================================================
 
 app = FastAPI(
 title="Media Roulette",
-description="Local random media recommendation service",
-version="2.0.0",
-lifespan=lifespan,
+description=(
+"Self-hosted media randomizer."
+),
+version=os.getenv(
+"APP_VERSION",
+"1.0.0",
+),
 docs_url=None,
 redoc_url=None,
 openapi_url=None,
@@ -237,60 +229,84 @@ openapi_url=None,
 
 # ============================================================================
 
-# RATE LIMITING
+# TEMPLATES / STATIC
 
 # ============================================================================
 
-app.state.limiter = limiter
-
-app.add_exception_handler(
-RateLimitExceeded,
-rate_limiter_exception_handler,
+templates = Jinja2Templates(
+directory=str(
+TEMPLATES_DIR
 )
-
-# ============================================================================
-
-# TRUSTED HOSTS
-
-# ============================================================================
-
-app.add_middleware(
-TrustedHostMiddleware,
-allowed_hosts=TRUSTED_HOSTS,
 )
-
-# ============================================================================
-
-# SESSION MIDDLEWARE
-
-# ============================================================================
-
-app.add_middleware(
-SessionMiddleware,
-secret_key=SECRET_KEY,
-max_age=SESSION_MAX_AGE,
-same_site=SESSION_SAME_SITE,
-https_only=ENVIRONMENT == "production",
-)
-
-# ============================================================================
-
-# SECURITY HEADERS
-
-# ============================================================================
-
-app = add_security_headers_fastapi(app)
-
-# ============================================================================
-
-# STATIC FILES
-
-# ============================================================================
 
 app.mount(
 "/static",
-StaticFiles(directory=str(STATIC_DIR)),
+StaticFiles(
+directory=str(
+STATIC_DIR
+)
+),
 name="static",
+)
+
+# ============================================================================
+
+# MIDDLEWARE
+
+# ============================================================================
+
+# ClientIPMiddleware must be installed before the rate-limiter dependencies
+
+# execute so request.state.client_ip is available.
+
+#
+
+# The middleware itself only trusts forwarded IP headers when the direct peer
+
+# belongs to TRUSTED_PROXY_IPS.
+
+app.add_middleware(
+ClientIPMiddleware,
+trusted_proxy_ips=TRUSTED_PROXY_IPS,
+)
+
+# Signed session cookie.
+
+#
+
+# SessionMiddleware uses itsdangerous internally and signs the cookie so the
+
+# browser cannot alter its contents without invalidating the signature.
+
+#
+
+# same_site="lax" is suitable for the normal browser navigation flow.
+
+#
+
+# https_only=True means the cookie will only be transmitted over HTTPS.
+
+# This is appropriate for the production Zoraxy deployment.
+
+app.add_middleware(
+SessionMiddleware,
+secret_key=(
+SESSION_SECRET
+if SESSION_SECRET
+else secrets.token_urlsafe(32)
+),
+session_cookie="media_roulette_session",
+max_age=60 * 60 * 24 * 14,
+same_site="lax",
+https_only=(
+PUBLIC_SCHEME == "https"
+),
+)
+
+# Application security headers.
+
+add_security_headers_fastapi(
+app
 )
 
 # ============================================================================
@@ -299,118 +315,221 @@ name="static",
 
 # ============================================================================
 
+app.include_router(
+router
+)
+
+# ============================================================================
+
+# HEALTH
+
+# ============================================================================
+
+@app.get(
+"/health",
+include_in_schema=False,
+)
+async def health() -> JSONResponse:
+"""
+Lightweight health endpoint.
+
+```
+This endpoint deliberately does not require authentication so that
+Zoraxy/container monitoring can check application availability.
+"""
+
+return JSONResponse(
+    {
+        "status": "ok",
+        "service": "media-roulette",
+    }
+)
+```
+
+# ============================================================================
+
+# APPLICATION PAGES
+
+# ============================================================================
+
 @app.get(
 "/",
 response_class=HTMLResponse,
 include_in_schema=False,
 )
-async def root(request: Request) -> HTMLResponse:
+async def index(
+request: Request,
+):
 """
-Render the main application page.
+Render the main application.
 
 ```
-Authentication is intentionally handled by the frontend/API layer so
-unauthenticated visitors can be redirected to the login page without
-duplicating authentication logic here.
+Authentication is handled by the template itself so an unauthenticated
+browser receives the login page without a redirect loop.
 """
 
-return templates.TemplateResponse(
-    "index.html",
-    {
-        "request": request,
-    },
+authenticated = bool(
+    request.session.get(
+        "authenticated",
+        False,
+    )
 )
-```
 
-@app.get(
-"/login",
-response_class=HTMLResponse,
-include_in_schema=False,
+csrf_token = request.session.get(
+    "csrf_token"
 )
-async def login_page(request: Request) -> HTMLResponse:
-"""
-Render the login page.
-"""
 
-```
-return templates.TemplateResponse(
-    "login.html",
-    {
-        "request": request,
-    },
-)
-```
+if not csrf_token:
+    csrf_token = secrets.token_urlsafe(
+        32
+    )
 
-@app.get(
-"/health",
-tags=["Health"],
-)
-async def health_check() -> dict[str, str]:
-"""
-Public health endpoint for Docker, Unraid and reverse-proxy monitoring.
+    request.session[
+        "csrf_token"
+    ] = csrf_token
 
-```
-This endpoint intentionally does not require authentication.
-"""
-
-return {
-    "status": "healthy",
-    "service": "media-roulette",
-    "version": "2.0.0",
-    "timestamp": datetime.now(timezone.utc).isoformat(),
+context: dict[str, Any] = {
+    "request": request,
+    "authenticated": authenticated,
+    "csrf_token": csrf_token,
+    "public_host": PUBLIC_HOST,
+    "public_scheme": PUBLIC_SCHEME,
 }
+
+return templates.TemplateResponse(
+    request=request,
+    name="index.html",
+    context=context,
+)
 ```
 
-@app.post(
-"/logout",
-include_in_schema=False,
+# ============================================================================
+
+# ERROR HANDLERS
+
+# ============================================================================
+
+@app.exception_handler(
+404
 )
-async def logout(request: Request) -> RedirectResponse:
+async def not_found(
+request: Request,
+exc,
+):
 """
-Clear the server-side authentication/session state.
-
-```
-The authentication implementation may store additional session values;
-clearing the complete session prevents stale authentication information
-from surviving logout.
+Return a JSON response for API requests and the normal application page
+for browser requests.
 """
 
-request.session.clear()
+```
+path = request.url.path
 
-response = RedirectResponse(
-    url="/login",
-    status_code=303,
+if path.startswith(
+    "/api/"
+):
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": "Not found.",
+        },
+    )
+
+return JSONResponse(
+    status_code=404,
+    content={
+        "detail": "Not found.",
+    },
+)
+```
+
+@app.exception_handler(
+500
+)
+async def internal_error(
+request: Request,
+exc,
+):
+"""
+Prevent internal exception details from reaching clients.
+"""
+
+```
+logger.exception(
+    "Unhandled application error"
 )
 
-# Explicitly expire the Starlette session cookie as an additional
-# defensive measure.
-response.delete_cookie(
-    key="session",
-    path="/",
+return JSONResponse(
+    status_code=500,
+    content={
+        "detail": "Internal server error.",
+    },
 )
-
-return response
 ```
 
 # ============================================================================
 
-# API ROUTER
+# STARTUP / SHUTDOWN
 
 # ============================================================================
 
-# Import only after the application-wide objects above have been initialized.
+@app.on_event(
+"startup"
+)
+async def startup_event() -> None:
+"""
+Application startup hook.
+"""
 
-# routes.py does not import templates from main.py, avoiding the circular
+```
+logger.info(
+    "Media Roulette starting"
+)
 
-# import present in the previous architecture.
+logger.info(
+    "Environment: %s",
+    ENVIRONMENT,
+)
 
-from app.api.routes import router as api_router
+logger.info(
+    "Public scheme: %s",
+    PUBLIC_SCHEME,
+)
 
-app.include_router(api_router)
+if PUBLIC_HOST:
+    logger.info(
+        "Public host: %s",
+        PUBLIC_HOST,
+    )
+
+if TRUSTED_PROXY_IPS:
+    logger.info(
+        "Trusted proxy addresses configured: %d",
+        len(TRUSTED_PROXY_IPS),
+    )
+else:
+    logger.info(
+        "No trusted proxy addresses configured; "
+        "direct connection addresses will be used."
+    )
+```
+
+@app.on_event(
+"shutdown"
+)
+async def shutdown_event() -> None:
+"""
+Application shutdown hook.
+"""
+
+```
+logger.info(
+    "Media Roulette shutting down"
+)
+```
 
 # ============================================================================
 
-# PUBLIC EXPORTS
+# EXPORT
 
 # ============================================================================
 
@@ -418,38 +537,3 @@ app.include_router(api_router)
 "app",
 "templates",
 ]
-
-# ============================================================================
-
-# DIRECT EXECUTION
-
-# ============================================================================
-
-if **name** == "**main**":
-import uvicorn
-
-```
-debug = (
-    os.getenv("DEBUG", "false").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-
-# Deliberately one worker.
-#
-# The library scanner performs filesystem/database work during startup.
-# Multiple Uvicorn workers would create separate processes and therefore
-# separate in-process locks, causing the startup scan to run multiple
-# times.
-uvicorn.run(
-    "app.main:app",
-    host=HOST,
-    port=PORT,
-    reload=debug,
-    workers=1,
-    proxy_headers=True,
-    forwarded_allow_ips=os.getenv(
-        "FORWARDED_ALLOW_IPS",
-        "*",
-    ),
-)
-```
