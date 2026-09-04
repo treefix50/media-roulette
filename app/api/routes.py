@@ -1,14 +1,13 @@
 """
 Media Roulette - API routes.
 
-Authentication is session based.
+Authentication:
+Signed browser session + CSRF token.
 
-The application is intended to run behind Zoraxy:
-Browser -> HTTPS/Zoraxy -> Media Roulette HTTP
+Deployment:
+Internet -> Zoraxy -> FastAPI
 
-There is deliberately no JWT/OAuth2 implementation here anymore.
-Authentication is handled through the signed session cookie provided by
-Starlette's SessionMiddleware and the helpers in app.security.
+No JWT/OAuth2 bearer tokens are used.
 """
 
 from **future** import annotations
@@ -29,11 +28,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.library import Library
-from app.main import templates
+from app.rate_limit import (
+enforce_api_rate_limit,
+enforce_login_rate_limit,
+enforce_scan_rate_limit,
+)
 from app.security import (
 authenticate_user,
 create_session,
-destroy_session,
 get_current_user,
 get_or_create_csrf_token,
 public_user,
@@ -41,30 +43,11 @@ require_auth,
 validate_csrf_token,
 )
 
-logger = logging.getLogger(**name**)
+logger = logging.getLogger(
+"media_roulette.api"
+)
 
 router = APIRouter()
-
-# ============================================================================
-
-# CONFIGURATION
-
-# ============================================================================
-
-DATABASE_PATH = os.getenv(
-"DATABASE_PATH",
-"/state/media_roulette.db",
-).strip()
-
-MOVIES_DIR = os.getenv(
-"MOVIES_DIR",
-"/data/movies",
-).strip()
-
-SERIES_DIR = os.getenv(
-"SERIES_DIR",
-"/data/tv",
-).strip()
 
 # ============================================================================
 
@@ -73,14 +56,23 @@ SERIES_DIR = os.getenv(
 # ============================================================================
 
 library = Library(
-db_path=DATABASE_PATH,
-movies_dir=MOVIES_DIR,
-series_dir=SERIES_DIR,
+db_path=os.getenv(
+"DATABASE_PATH",
+"/state/media_roulette.db",
+),
+movies_dir=os.getenv(
+"MOVIES_DIR",
+"/data/movies",
+),
+series_dir=os.getenv(
+"SERIES_DIR",
+"/data/tv",
+),
 )
 
 # ============================================================================
 
-# PUBLIC MEDIA REPRESENTATION
+# HELPERS
 
 # ============================================================================
 
@@ -88,50 +80,185 @@ def public_item(
 item: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
 """
-Convert an internal media database record into a safe API object.
+Convert an internal media record into a safe API representation.
 
 ```
-Internal filesystem paths are never exposed.
-
-Local posters are served through:
-    /api/poster/{id}
-
-Remote poster URLs are intentionally not exposed anymore. This keeps the
-Content-Security-Policy strict and prevents the browser from loading
-arbitrary remote image resources.
+Internal filesystem paths are never returned.
 """
 
 if not item:
     return None
 
-data = dict(item)
+data = dict(
+    item
+)
 
 # ------------------------------------------------------------------------
-# Never expose internal filesystem paths.
+# Never expose filesystem paths.
 # ------------------------------------------------------------------------
 
-data.pop("path", None)
-data.pop("nfo_path", None)
-data.pop("poster_path", None)
+data.pop(
+    "path",
+    None,
+)
+
+data.pop(
+    "nfo_path",
+    None,
+)
+
+data.pop(
+    "poster_path",
+    None,
+)
 
 # ------------------------------------------------------------------------
-# Poster
+# Local poster.
 # ------------------------------------------------------------------------
 
-media_id = data.get("id")
-local_poster = item.get("poster_path")
+media_id = data.get(
+    "id"
+)
 
-if media_id is not None and local_poster:
+local_poster = item.get(
+    "poster_path"
+)
+
+if (
+    media_id is not None
+    and local_poster
+):
     try:
-        data["poster_url"] = f"/api/poster/{int(media_id)}"
-    except (TypeError, ValueError):
+        data["poster_url"] = (
+            f"/api/poster/{int(media_id)}"
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
         pass
 
-# The original NFO poster value may be a local filename or URL.
-# It must never be exposed separately.
-data.pop("poster", None)
+# ------------------------------------------------------------------------
+# Remote poster URL.
+# ------------------------------------------------------------------------
+
+if "poster_url" not in data:
+
+    poster = item.get(
+        "poster"
+    )
+
+    if poster:
+
+        poster = str(
+            poster
+        ).strip()
+
+        if poster.lower().startswith(
+            (
+                "https://",
+                "http://",
+            )
+        ):
+            data["poster_url"] = poster
+
+# The raw poster field may contain a local filename.
+data.pop(
+    "poster",
+    None,
+)
 
 return data
+```
+
+def _validate_kind(
+kind: str | None,
+) -> str | None:
+"""
+Validate the requested media type.
+"""
+
+```
+if kind is None:
+    return None
+
+normalized = kind.strip().casefold()
+
+if not normalized:
+    return None
+
+if normalized not in {
+    "movie",
+    "series",
+}:
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid media type.",
+    )
+
+return normalized
+```
+
+def _validate_provider(
+provider: str | None,
+) -> str | None:
+"""
+Normalize provider input.
+
+```
+Library performs the authoritative provider validation.
+"""
+
+if provider is None:
+    return None
+
+normalized = provider.strip().casefold()
+
+if not normalized:
+    return None
+
+if len(normalized) > 64:
+    raise HTTPException(
+        status_code=400,
+        detail="Provider value is too long.",
+    )
+
+return normalized
+```
+
+def _parse_exclude(
+exclude: str | None,
+) -> list[str]:
+"""
+Convert newline-separated excluded titles into a bounded list.
+"""
+
+```
+if not exclude:
+    return []
+
+titles: list[str] = []
+
+for raw in exclude.splitlines():
+
+    title = raw.strip()
+
+    if not title:
+        continue
+
+    if len(title) > 500:
+        continue
+
+    if title not in titles:
+        titles.append(
+            title
+        )
+
+    # Prevent a huge request body from becoming a large SQL statement.
+    if len(titles) >= 100:
+        break
+
+return titles
 ```
 
 # ============================================================================
@@ -141,43 +268,68 @@ return data
 # ============================================================================
 
 @router.post(
-"/api/login",
+"/api/token",
 tags=["Auth"],
 )
 async def login(
 request: Request,
 username: str = Form(...),
 password: str = Form(...),
-csrf_token: str | None = Form(None),
+csrf_token: str | None = Form(
+default=None
+),
+_rate_limit: None = Depends(
+enforce_login_rate_limit
+),
 ):
 """
-Authenticate a user and create a signed browser session.
+Authenticate the user and establish a signed browser session.
 
 ```
-The login form is the only place where credentials are accepted.
+The endpoint keeps the historic /api/token URL so existing frontend code
+can be migrated without changing the public API path.
 
-The password is never stored in the session.
+OAuth2 bearer tokens are intentionally not returned.
 """
 
-# Login is intentionally protected by CSRF when the browser already has
-# a session. For a completely new anonymous browser session, there is no
-# previous CSRF token to validate.
-existing_csrf = request.session.get(
-    "csrf_token"
-)
-
-if existing_csrf is not None:
+# Login CSRF is validated only when a CSRF token was supplied.
+#
+# A completely unauthenticated browser does not necessarily have a
+# session-bound token yet. The login rate limiter provides the primary
+# brute-force protection for this endpoint.
+if csrf_token is not None:
     validate_csrf_token(
         request,
         csrf_token,
     )
 
-user = authenticate_user(
-    username,
-    password,
-)
+username = username.strip()
+
+if not username:
+    raise HTTPException(
+        status_code=401,
+        detail="Incorrect email or password.",
+    )
+
+try:
+    user = await run_in_threadpool(
+        authenticate_user,
+        username,
+        password,
+    )
+
+except ValueError:
+    raise HTTPException(
+        status_code=401,
+        detail="Incorrect email or password.",
+    )
 
 if user is None:
+    logger.warning(
+        "Failed login attempt for %s",
+        username[:128],
+    )
+
     raise HTTPException(
         status_code=401,
         detail="Incorrect email or password.",
@@ -188,78 +340,18 @@ create_session(
     user,
 )
 
-# Generate a fresh CSRF token after authentication.
-get_or_create_csrf_token(
-    request,
-)
-
 logger.info(
     "Successful login for %s",
-    user.get("email", "unknown"),
+    user.get(
+        "email",
+        "unknown",
+    ),
 )
 
 return {
     "success": True,
-    "user": public_user(user),
-}
-```
-
-@router.post(
-"/api/logout",
-tags=["Auth"],
-)
-async def logout(
-request: Request,
-csrf_token: str | None = Form(None),
-):
-"""
-Destroy the current authenticated session.
-"""
-
-```
-if request.session.get("authenticated"):
-    validate_csrf_token(
-        request,
-        csrf_token,
-    )
-
-email = request.session.get(
-    "email",
-    "unknown",
-)
-
-destroy_session(
-    request,
-)
-
-logger.info(
-    "Logout for %s",
-    email,
-)
-
-return {
-    "success": True,
-}
-```
-
-@router.get(
-"/api/csrf",
-tags=["Auth"],
-)
-async def csrf_token(
-request: Request,
-):
-"""
-Return the CSRF token for the current browser session.
-
-```
-This endpoint does not require authentication because it is also used
-before login.
-"""
-
-return {
-    "csrf_token": get_or_create_csrf_token(
-        request,
+    "user": public_user(
+        user
     ),
 }
 ```
@@ -269,37 +361,47 @@ return {
 tags=["Auth"],
 )
 async def get_current_user_info(
+request: Request,
 current_user: dict[str, Any] = Depends(
 require_auth
 ),
+_rate_limit: None = Depends(
+enforce_api_rate_limit
+),
 ):
 """
-Return the authenticated user's public account information.
+Return the currently authenticated user's public information.
 """
 
 ```
-return public_user(
-    current_user,
-)
+return {
+    "authenticated": True,
+    "user": public_user(
+        current_user
+    ),
+    "csrf_token": get_or_create_csrf_token(
+        request
+    ),
+}
 ```
 
 # ============================================================================
 
-# HEALTH
+# API HEALTH
 
 # ============================================================================
 
 @router.get(
 "/api/test",
-tags=["Health"],
-include_in_schema=False,
+tags=["System"],
 )
 async def test():
 """
-Legacy compatibility health endpoint.
+Lightweight application API test.
 
 ```
-/health in main.py is the preferred health endpoint.
+This endpoint is deliberately public so a reverse proxy can use it for
+connectivity checks without needing an application session.
 """
 
 return {
@@ -322,22 +424,25 @@ async def scan(
 current_user: dict[str, Any] = Depends(
 require_auth
 ),
+_rate_limit: None = Depends(
+enforce_scan_rate_limit
+),
 ):
 """
 Trigger a complete library scan.
 
 ```
-The synchronous filesystem/database scanner runs in a threadpool so the
-FastAPI event loop remains responsive.
+The synchronous scanner is executed in a worker thread.
 """
 
 try:
+
     count = await run_in_threadpool(
-        library.scan,
+        library.scan
     )
 
     stats = await run_in_threadpool(
-        library.stats,
+        library.stats
     )
 
     logger.info(
@@ -355,8 +460,9 @@ try:
     }
 
 except Exception as exc:
+
     logger.exception(
-        "Manual library scan failed",
+        "Manual library scan failed"
     )
 
     raise HTTPException(
@@ -376,8 +482,11 @@ except Exception as exc:
 tags=["Library"],
 )
 async def stats(
-current_user: dict[str, Any] = Depends(
+_current_user: dict[str, Any] = Depends(
 require_auth
+),
+_rate_limit: None = Depends(
+enforce_api_rate_limit
 ),
 ):
 """
@@ -389,15 +498,15 @@ private media library.
 """
 
 try:
-    result = await run_in_threadpool(
-        library.stats,
+
+    return await run_in_threadpool(
+        library.stats
     )
 
-    return result
-
 except Exception as exc:
+
     logger.exception(
-        "Loading stats failed",
+        "Loading library statistics failed"
     )
 
     raise HTTPException(
@@ -423,96 +532,41 @@ exclude: str | None = None,
 current_user: dict[str, Any] = Depends(
 require_auth
 ),
+_rate_limit: None = Depends(
+enforce_api_rate_limit
+),
 ):
 """
 Return one random media recommendation.
 
 ```
-Supported parameters:
+Supported filters:
 
     kind:
         movie
         series
 
     provider:
-        any provider discovered by the library scanner
-        "alle" means all providers
+        provider name
+        "alle"
 
     exclude:
-        newline-separated titles that should be excluded when possible.
+        newline-separated titles
 """
 
+normalized_kind = _validate_kind(
+    kind
+)
+
+normalized_provider = _validate_provider(
+    provider
+)
+
+exclude_titles = _parse_exclude(
+    exclude
+)
+
 try:
-    # --------------------------------------------------------------------
-    # Validate kind.
-    # --------------------------------------------------------------------
-
-    normalized_kind = (
-        kind.strip().casefold()
-        if kind
-        else None
-    )
-
-    if normalized_kind not in {
-        None,
-        "",
-        "movie",
-        "series",
-    }:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid media type.",
-        )
-
-    if normalized_kind == "":
-        normalized_kind = None
-
-    # --------------------------------------------------------------------
-    # Normalize provider.
-    # --------------------------------------------------------------------
-
-    normalized_provider = (
-        provider.strip()
-        if provider
-        else None
-    )
-
-    if normalized_provider == "":
-        normalized_provider = None
-
-    # --------------------------------------------------------------------
-    # Excluded titles.
-    #
-    # Limit the amount of user-controlled data passed to the SQL layer.
-    # The library itself still uses parameterized queries.
-    # --------------------------------------------------------------------
-
-    exclude_titles: list[str] = []
-
-    for title in (
-        exclude or ""
-    ).splitlines():
-
-        cleaned = title.strip()
-
-        if not cleaned:
-            continue
-
-        if len(cleaned) > 500:
-            continue
-
-        if cleaned not in exclude_titles:
-            exclude_titles.append(
-                cleaned
-            )
-
-        # Prevent excessively large NOT IN lists.
-        if len(exclude_titles) >= 100:
-            break
-
-    # --------------------------------------------------------------------
-    # First attempt: honor exclusions.
-    # --------------------------------------------------------------------
 
     item = await run_in_threadpool(
         library.random_item,
@@ -521,12 +575,10 @@ try:
         exclude_titles,
     )
 
-    # --------------------------------------------------------------------
-    # If all matching items were excluded, allow a fallback.
-    # --------------------------------------------------------------------
-
+    # If all matching titles were excluded, fall back to the full
+    # matching set.
     if (
-        not item
+        item is None
         and exclude_titles
     ):
         item = await run_in_threadpool(
@@ -536,11 +588,7 @@ try:
             None,
         )
 
-    # --------------------------------------------------------------------
-    # No result.
-    # --------------------------------------------------------------------
-
-    if not item:
+    if item is None:
         return JSONResponse(
             status_code=404,
             content={
@@ -550,25 +598,25 @@ try:
         )
 
     public_data = public_item(
-        item,
+        item
     )
 
-    if not public_data:
+    if public_data is None:
         return JSONResponse(
             status_code=404,
             content={
                 "success": False,
-                "message": "Found media could not be read.",
+                "message": "Media could not be read.",
             },
         )
 
     logger.info(
-        "Recommendation: %s - %s (%s) @ %s (by %s)",
+        "Recommendation: %s - %s (%s) @ %s by %s",
         public_data.get(
-            "kind",
+            "kind"
         ),
         public_data.get(
-            "title",
+            "title"
         ),
         public_data.get(
             "year",
@@ -593,8 +641,9 @@ except HTTPException:
     raise
 
 except Exception as exc:
+
     logger.exception(
-        "Random recommendation failed",
+        "Random recommendation failed"
     )
 
     raise HTTPException(
@@ -615,16 +664,18 @@ tags=["Library"],
 )
 async def poster(
 media_id: int,
-current_user: dict[str, Any] = Depends(
+_current_user: dict[str, Any] = Depends(
 require_auth
+),
+_rate_limit: None = Depends(
+enforce_api_rate_limit
 ),
 ):
 """
-Serve a locally stored poster.
+Serve a scanner-approved local poster.
 
 ```
-The client cannot supply a filesystem path. The database ID is resolved
-through Library.poster_for_id(), which performs the path security checks.
+Library.poster_for_id() performs the authoritative path validation.
 """
 
 if media_id <= 0:
@@ -634,6 +685,7 @@ if media_id <= 0:
     )
 
 try:
+
     poster_path = await run_in_threadpool(
         library.poster_for_id,
         media_id,
@@ -646,7 +698,7 @@ try:
         )
 
     path = Path(
-        poster_path,
+        poster_path
     ).resolve()
 
     if not path.is_file():
@@ -662,26 +714,23 @@ try:
         ".webp": "image/webp",
     }
 
-    suffix = path.suffix.casefold()
-
     media_type = media_types.get(
-        suffix,
+        path.suffix.casefold()
     )
 
     if media_type is None:
         raise HTTPException(
             status_code=404,
-            detail="Invalid poster format.",
+            detail="Poster format is not supported.",
         )
 
     return FileResponse(
-        path=str(path),
+        path=str(
+            path
+        ),
         media_type=media_type,
         filename=path.name,
         headers={
-            # Posters are local, immutable-ish media assets. They can be
-            # cached safely for a day. Authentication remains required
-            # before the resource can be requested.
             "Cache-Control": (
                 "private, max-age=86400"
             ),
@@ -696,6 +745,7 @@ except HTTPException:
     raise
 
 except Exception as exc:
+
     logger.exception(
         "Poster loading failed for media %s",
         media_id,
@@ -709,18 +759,12 @@ except Exception as exc:
 
 # ============================================================================
 
-# PUBLIC EXPORTS
+# EXPORTS
 
 # ============================================================================
 
 **all** = [
 "library",
-"login",
-"logout",
-"poster",
 "public_item",
-"random_media",
 "router",
-"scan",
-"stats",
 ]
