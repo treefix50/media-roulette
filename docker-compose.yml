@@ -1,54 +1,126 @@
 services:
-  media-roulette:
-    container_name: media-roulette
+media-roulette:
+container_name: media-roulette
 
-    build:
-      context: .
-      dockerfile: Dockerfile
+```
+build:
+  context: .
+  dockerfile: Dockerfile
 
-    restart: unless-stopped
+restart: unless-stopped
 
-    ports:
-      - "8000:8000"
+# ------------------------------------------------------------------------
+# No host port mapping.
+#
+# With Unraid br0 the container receives its own LAN IP.
+# Example:
+#
+#   Media Roulette -> 192.168.1.250:8000
+#
+# Zoraxy connects directly to that address.
+# ------------------------------------------------------------------------
 
-    environment:
-      TZ: Europe/Zurich
+expose:
+  - "8000"
 
-      # Media-Roulette paths inside the container
-      MOVIES_DIR: /data/movies
-      SERIES_DIR: /data/tv
+environment:
+  # ----------------------------------------------------------------------
+  # Runtime
+  # ----------------------------------------------------------------------
 
-      # Persistent SQLite database
-      DATABASE_PATH: /state/media_roulette.db
+  TZ: Europe/Zurich
+  ENVIRONMENT: production
 
-      # Application logging
-      LOG_LEVEL: INFO
+  HOST: 0.0.0.0
+  PORT: "8000"
 
-    volumes:
-      # --------------------------------------------------------
-      # Media library
-      # Read-only: Media-Roulette must never modify your media.
-      # --------------------------------------------------------
+  LOG_LEVEL: INFO
 
-      - /mnt/user/data/media/movies:/data/movies:ro
-      - /mnt/user/data/media/tv:/data/tv:ro
+  # ----------------------------------------------------------------------
+  # Public URL
+  #
+  # Example:
+  #
+  #   PUBLIC_HOST=media.example.ch
+  # ----------------------------------------------------------------------
 
-      # --------------------------------------------------------
-      # Application state
-      # SQLite database / persistent application data
-      # --------------------------------------------------------
+  PUBLIC_HOST: "${PUBLIC_HOST:?PUBLIC_HOST must be set}"
+  PUBLIC_SCHEME: "https"
 
-      - ./data:/state
+  # ----------------------------------------------------------------------
+  # Host validation
+  # ----------------------------------------------------------------------
 
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/test', timeout=5)"
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+  TRUSTED_HOSTS: "${TRUSTED_HOSTS:?TRUSTED_HOSTS must be set}"
+
+  # ----------------------------------------------------------------------
+  # Reverse proxy
+  #
+  # Zoraxy's actual br0 IP should be supplied through .env if forwarded
+  # client information is used.
+  # ----------------------------------------------------------------------
+
+  TRUSTED_PROXY_IPS: "${TRUSTED_PROXY_IPS:-}"
+
+  # ----------------------------------------------------------------------
+  # Session signing key
+  # ----------------------------------------------------------------------
+
+  SESSION_SECRET: "${SESSION_SECRET:?SESSION_SECRET must be set}"
+
+  # ----------------------------------------------------------------------
+  # Media library
+  # ----------------------------------------------------------------------
+
+  MOVIES_DIR: /data/movies
+  SERIES_DIR: /data/tv
+
+  # ----------------------------------------------------------------------
+  # Persistent database
+  # ----------------------------------------------------------------------
+
+  DATABASE_PATH: /state/media_roulette.db
+
+volumes:
+  # ----------------------------------------------------------------------
+  # Media - READ ONLY
+  # ----------------------------------------------------------------------
+
+  - /mnt/user/data/media/movies:/data/movies:ro
+  - /mnt/user/data/media/tv:/data/tv:ro
+
+  # ----------------------------------------------------------------------
+  # Persistent application state
+  # ----------------------------------------------------------------------
+
+  - ./data:/state
+
+# ------------------------------------------------------------------------
+# Container health
+# ------------------------------------------------------------------------
+
+healthcheck:
+  test:
+    [
+      "CMD",
+      "python",
+      "-c",
+      "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+    ]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+
+# ------------------------------------------------------------------------
+# Container hardening
+# ------------------------------------------------------------------------
+
+init: true
+
+security_opt:
+  - no-new-privileges:true
+
+cap_drop:
+  - ALL
+```
