@@ -1,54 +1,43 @@
 """
-Media Roulette - Authentication and security helpers.
+Media Roulette - authentication and session security.
 
-Authentication is session-based.
-
-The browser receives a signed HttpOnly session cookie from Starlette's
-SessionMiddleware. No JWT is stored in localStorage or sessionStorage.
-
-The application expects the following environment variables:
+Authentication model:
 
 ```
-SECRET_KEY
-ADMIN_EMAIL
-ADMIN_PASSWORD
+Browser
+    |
+  Zoraxy
+    |
+FastAPI
+    |
+signed session cookie
 ```
 
-Optional:
+Passwords are stored as Argon2id password hashes.
 
-```
-ACCESS_TOKEN_EXPIRE_MINUTES
-```
+The browser session contains only the minimum information required by the
+application. Passwords and password hashes are never placed into the session.
 
-The legacy JWT-related configuration is intentionally not used by the
-application anymore. The name ACCESS_TOKEN_EXPIRE_MINUTES is retained only
-for backwards-compatible configuration handling and is not required for
-session authentication.
+CSRF protection is implemented using a random per-session token and
+constant-time comparison.
 """
 
 from **future** import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
-from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request, status
-from passlib.context import CryptContext
+from fastapi import HTTPException, Request
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.library import get_db
 
-# ============================================================================
-
-# PASSWORD HASHING
-
-# ============================================================================
-
-pwd_context = CryptContext(
-schemes=["bcrypt"],
-deprecated="auto",
+logger = logging.getLogger(
+"media_roulette.security"
 )
 
 # ============================================================================
@@ -57,110 +46,159 @@ deprecated="auto",
 
 # ============================================================================
 
-ADMIN_EMAIL = os.getenv(
-"ADMIN_EMAIL",
-"",
-).strip().lower()
+SESSION_USER_KEY = "user_id"
+SESSION_EMAIL_KEY = "email"
+SESSION_AUTHENTICATED_KEY = "authenticated"
+SESSION_CSRF_KEY = "csrf_token"
 
-ADMIN_PASSWORD = os.getenv(
-"ADMIN_PASSWORD",
-"",
-)
+CSRF_TOKEN_BYTES = 32
 
-if not ADMIN_EMAIL:
-raise RuntimeError(
-"ADMIN_EMAIL is not configured."
-)
+# ============================================================================
 
-if not ADMIN_PASSWORD:
-raise RuntimeError(
-"ADMIN_PASSWORD is not configured."
-)
+# OPTIONAL BASIC-AUTH COMPATIBILITY
 
-if len(ADMIN_PASSWORD) < 12:
-raise RuntimeError(
-"ADMIN_PASSWORD must contain at least 12 characters."
+# ============================================================================
+
+# Kept available for backwards compatibility with older imports.
+
+#
+
+# The application itself uses browser sessions, not HTTP Basic Auth.
+
+basic_security = HTTPBasic(
+auto_error=False
 )
 
 # ============================================================================
 
-# INTERNAL HELPERS
+# PASSWORD HASHING
 
 # ============================================================================
 
-def _utc_now() -> str:
+def _argon2_hasher():
 """
-Return the current UTC time as an ISO-8601 string.
+Create the Argon2 password hasher lazily.
+
+```
+Importing this module therefore does not immediately fail if Argon2 is
+unavailable. Authentication itself will provide a clear error.
+"""
+
+try:
+    from argon2 import PasswordHasher
+
+    return PasswordHasher(
+        time_cost=3,
+        memory_cost=65536,
+        parallelism=2,
+        hash_len=32,
+        salt_len=16,
+    )
+
+except ImportError as exc:
+    raise RuntimeError(
+        "The 'argon2-cffi' package is required for authentication."
+    ) from exc
+```
+
+def hash_password(
+password: str,
+) -> str:
+"""
+Hash a password using Argon2id.
 """
 
 ```
-return datetime.now(timezone.utc).isoformat()
+if not isinstance(
+    password,
+    str,
+):
+    raise TypeError(
+        "password must be a string."
+    )
+
+if not password:
+    raise ValueError(
+        "password must not be empty."
+    )
+
+hasher = _argon2_hasher()
+
+return hasher.hash(
+    password
+)
 ```
 
-def _constant_time_equal(
-left: str,
-right: str,
+def verify_password(
+password: str,
+password_hash: str,
 ) -> bool:
 """
-Compare two strings in constant time.
+Verify a password against an Argon2id hash.
 
 ```
-This is used for values such as CSRF/session-related tokens where a
-timing-safe comparison is appropriate.
+Returns False for malformed hashes instead of leaking implementation
+details to the caller.
 """
 
-return hmac.compare_digest(
-    left.encode("utf-8"),
-    right.encode("utf-8"),
-)
+if not password:
+    return False
+
+if not password_hash:
+    return False
+
+try:
+    hasher = _argon2_hasher()
+
+    return bool(
+        hasher.verify(
+            password_hash,
+            password,
+        )
+    )
+
+except Exception:
+    return False
 ```
 
-def _session_fingerprint(request: Request) -> str:
+def password_needs_rehash(
+password_hash: str,
+) -> bool:
 """
-Create a lightweight fingerprint for the current authenticated session.
+Return whether the stored Argon2 hash should be regenerated.
+"""
 
 ```
-The fingerprint is not used as the authentication credential itself.
-It only gives us a stable value that can be stored in the session and
-compared during the current browser session.
+if not password_hash:
+    return True
 
-We deliberately do not store IP addresses or user-agent strings in the
-database.
-"""
+try:
+    hasher = _argon2_hasher()
 
-user_agent = request.headers.get(
-    "user-agent",
-    "",
-)
+    return bool(
+        hasher.check_needs_rehash(
+            password_hash
+        )
+    )
 
-forwarded_for = request.headers.get(
-    "x-forwarded-for",
-    "",
-)
-
-raw = f"{user_agent}|{forwarded_for}"
-
-return hashlib.sha256(
-    raw.encode("utf-8")
-).hexdigest()
+except Exception:
+    return False
 ```
 
 # ============================================================================
 
-# DATABASE HELPERS
+# USER DATABASE
 
 # ============================================================================
 
 def _ensure_users_table() -> None:
 """
-Ensure the users table exists.
-
-```
-This keeps authentication initialization self-contained. The operation is
-idempotent and safe to execute repeatedly.
+Create the application users table if it does not already exist.
 """
 
+```
 with get_db() as conn:
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -168,27 +206,66 @@ with get_db() as conn:
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             is_active INTEGER NOT NULL DEFAULT 1,
-            is_admin INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
     )
 
-    conn.commit()
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_users_email
+        ON users(email)
+        """
+    )
 ```
 
-def _find_user_by_email(
+_ensure_users_table()
+
+def _normalize_email(
+email: str,
+) -> str:
+"""
+Normalize an email address for account lookup.
+
+```
+Email local-part case sensitivity is technically possible, but practically
+most application accounts treat email addresses case-insensitively. Media
+Roulette follows that common behavior.
+"""
+
+value = (
+    email
+    or ""
+).strip().casefold()
+
+if not value:
+    raise ValueError(
+        "Email address must not be empty."
+    )
+
+if len(value) > 320:
+    raise ValueError(
+        "Email address is too long."
+    )
+
+return value
+```
+
+def get_user_by_email(
 email: str,
 ) -> dict[str, Any] | None:
 """
-Find a user by normalized email address.
+Retrieve one user by normalized email address.
 """
 
 ```
-normalized_email = email.strip().lower()
+normalized = _normalize_email(
+    email
+)
 
 with get_db() as conn:
+
     row = conn.execute(
         """
         SELECT
@@ -196,31 +273,37 @@ with get_db() as conn:
             email,
             password_hash,
             is_active,
-            is_admin,
             created_at,
             updated_at
         FROM users
         WHERE email = ?
         LIMIT 1
         """,
-        (normalized_email,),
+        (
+            normalized,
+        ),
     ).fetchone()
 
-if row is None:
-    return None
-
-return dict(row)
+return (
+    dict(row)
+    if row
+    else None
+)
 ```
 
-def _find_user_by_id(
+def get_user_by_id(
 user_id: int,
 ) -> dict[str, Any] | None:
 """
-Find a user by database ID.
+Retrieve one user by numeric ID.
 """
 
 ```
+if user_id <= 0:
+    return None
+
 with get_db() as conn:
+
     row = conn.execute(
         """
         SELECT
@@ -228,125 +311,127 @@ with get_db() as conn:
             email,
             password_hash,
             is_active,
-            is_admin,
             created_at,
             updated_at
         FROM users
         WHERE id = ?
         LIMIT 1
         """,
-        (user_id,),
+        (
+            user_id,
+        ),
     ).fetchone()
 
-if row is None:
-    return None
-
-return dict(row)
+return (
+    dict(row)
+    if row
+    else None
+)
 ```
 
-# ============================================================================
-
-# PASSWORD FUNCTIONS
-
-# ============================================================================
-
-def hash_password(password: str) -> str:
+def create_user(
+email: str,
+password: str,
+) -> int:
 """
-Hash a password using bcrypt.
-"""
+Create a new local application user.
 
 ```
-if not isinstance(password, str):
-    raise TypeError("password must be a string")
-
-if not password:
-    raise ValueError("password must not be empty")
-
-return pwd_context.hash(password)
-```
-
-def verify_password(
-plain_password: str,
-password_hash: str,
-) -> bool:
-"""
-Verify a plaintext password against a stored bcrypt hash.
-
-```
-Invalid/malformed hashes are treated as authentication failures rather
-than being allowed to crash the login endpoint.
+Returns the numeric user ID.
 """
 
-if not plain_password or not password_hash:
-    return False
-
-try:
-    return pwd_context.verify(
-        plain_password,
-        password_hash,
-    )
-except Exception:
-    return False
-```
-
-# ============================================================================
-
-# ADMIN INITIALIZATION
-
-# ============================================================================
-
-def create_default_admin() -> None:
-"""
-Create the configured administrator if no user with that email exists.
-
-```
-This function does NOT overwrite an existing password.
-
-It is intentionally idempotent so it can safely be called during
-application startup.
-
-ADMIN_PASSWORD therefore acts as an initial bootstrap credential only.
-Once the admin account exists, changing ADMIN_PASSWORD in the environment
-does not silently replace the existing database password.
-"""
-
-_ensure_users_table()
-
-existing = _find_user_by_email(
-    ADMIN_EMAIL,
+normalized = _normalize_email(
+    email
 )
 
-if existing is not None:
-    return
-
-now = _utc_now()
+if len(password) < 12:
+    raise ValueError(
+        "Password must contain at least 12 characters."
+    )
 
 password_hash = hash_password(
-    ADMIN_PASSWORD,
+    password
 )
 
+from datetime import datetime, timezone
+
+now = datetime.now(
+    timezone.utc
+).isoformat()
+
 with get_db() as conn:
-    conn.execute(
+
+    cursor = conn.execute(
         """
         INSERT INTO users (
             email,
             password_hash,
             is_active,
-            is_admin,
             created_at,
             updated_at
         )
-        VALUES (?, ?, 1, 1, ?, ?)
+        VALUES (
+            ?, ?, 1, ?, ?
+        )
         """,
         (
-            ADMIN_EMAIL,
+            normalized,
             password_hash,
             now,
             now,
         ),
     )
 
-    conn.commit()
+    return int(
+        cursor.lastrowid
+    )
+```
+
+def update_password(
+user_id: int,
+password: str,
+) -> None:
+"""
+Replace a user's password hash.
+"""
+
+```
+if user_id <= 0:
+    raise ValueError(
+        "Invalid user ID."
+    )
+
+if len(password) < 12:
+    raise ValueError(
+        "Password must contain at least 12 characters."
+    )
+
+password_hash = hash_password(
+    password
+)
+
+from datetime import datetime, timezone
+
+now = datetime.now(
+    timezone.utc
+).isoformat()
+
+with get_db() as conn:
+
+    conn.execute(
+        """
+        UPDATE users
+        SET
+            password_hash = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            password_hash,
+            now,
+            user_id,
+        ),
+    )
 ```
 
 # ============================================================================
@@ -363,60 +448,169 @@ password: str,
 Authenticate a user.
 
 ```
-Returns the database user dictionary on success and None on failure.
+Returns the database user record on success and None on failure.
+
+A dummy Argon2 verification is performed when the email does not exist.
+This makes username enumeration somewhat harder by keeping the expensive
+password-hashing operation present for both paths.
 """
 
-normalized_email = email.strip().lower()
+normalized = _normalize_email(
+    email
+)
 
-if not normalized_email or not password:
-    return None
-
-user = _find_user_by_email(
-    normalized_email,
+user = get_user_by_email(
+    normalized
 )
 
 if user is None:
+
+    # Deliberately perform an Argon2 verification against a static,
+    # intentionally invalid account hash if possible.
+    #
+    # The value is only a timing-equalization mechanism and does not
+    # represent an actual user password.
+    dummy_hash = (
+        "$argon2id$v=19$m=65536,t=3,p=2$"
+        "c2FsdHNhbHQ$"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    )
+
+    verify_password(
+        password,
+        dummy_hash,
+    )
+
     return None
 
-if not bool(user["is_active"]):
+if not bool(
+    user.get(
+        "is_active",
+        0,
+    )
+):
     return None
 
 if not verify_password(
     password,
-    user["password_hash"],
+    str(
+        user.get(
+            "password_hash",
+            "",
+        )
+    ),
 ):
     return None
 
+# Transparently upgrade old Argon2 parameters.
+if password_needs_rehash(
+    str(
+        user["password_hash"]
+    )
+):
+    try:
+        update_password(
+            int(
+                user["id"]
+            ),
+            password,
+        )
+
+        refreshed = get_user_by_id(
+            int(
+                user["id"]
+            )
+        )
+
+        if refreshed:
+            user = refreshed
+
+    except Exception:
+        logger.exception(
+            "Could not rehash password for user %s",
+            user.get("id"),
+        )
+
 return user
 ```
+
+# ============================================================================
+
+# PUBLIC USER DATA
+
+# ============================================================================
+
+def public_user(
+user: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+"""
+Return only safe user fields for API responses.
+"""
+
+```
+if not user:
+    return None
+
+return {
+    "id": int(
+        user["id"]
+    ),
+    "email": str(
+        user["email"]
+    ),
+    "is_active": bool(
+        user.get(
+            "is_active",
+            1,
+        )
+    ),
+}
+```
+
+# ============================================================================
+
+# SESSION
+
+# ============================================================================
 
 def create_session(
 request: Request,
 user: dict[str, Any],
 ) -> None:
 """
-Initialize an authenticated server-side session.
+Create a minimal authenticated browser session.
 
 ```
-Starlette's SessionMiddleware signs the session cookie. Sensitive
-credentials are never stored in the browser's JavaScript storage.
-
-Only the minimal identity information required by the application is
-stored in the session.
+Existing session contents are discarded before authentication information
+is written, preventing session fixation.
 """
+
+user_id = int(
+    user["id"]
+)
+
+email = str(
+    user["email"]
+)
 
 request.session.clear()
 
-request.session["authenticated"] = True
-request.session["user_id"] = int(user["id"])
-request.session["email"] = str(user["email"])
-request.session["is_admin"] = bool(user["is_admin"])
-request.session["created_at"] = _utc_now()
+request.session[
+    SESSION_AUTHENTICATED_KEY
+] = True
 
-# Session fingerprint is informational/defensive only. Authentication
-# remains based on the signed session cookie and the active database user.
-request.session["session_fingerprint"] = _session_fingerprint(
-    request
+request.session[
+    SESSION_USER_KEY
+] = user_id
+
+request.session[
+    SESSION_EMAIL_KEY
+] = email
+
+request.session[
+    SESSION_CSRF_KEY
+] = secrets.token_urlsafe(
+    CSRF_TOKEN_BYTES
 )
 ```
 
@@ -424,129 +618,101 @@ def destroy_session(
 request: Request,
 ) -> None:
 """
-Destroy the current authenticated session.
+Destroy the current browser session.
 """
 
 ```
 request.session.clear()
 ```
 
-# ============================================================================
+def is_authenticated(
+request: Request,
+) -> bool:
+"""
+Check whether the request contains an authenticated session.
+"""
 
-# CURRENT USER
-
-# ============================================================================
+```
+return bool(
+    request.session.get(
+        SESSION_AUTHENTICATED_KEY,
+        False,
+    )
+)
+```
 
 def get_current_user(
 request: Request,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
 """
-Return the currently authenticated user.
+Resolve the current session user from the database.
 
 ```
-Raises HTTP 401 if no valid authenticated session exists.
+This deliberately does not trust the email stored in the cookie.
 """
 
-authenticated = request.session.get(
-    "authenticated",
-    False,
-)
+if not is_authenticated(
+    request
+):
+    return None
 
-user_id = request.session.get(
-    "user_id",
+raw_user_id = request.session.get(
+    SESSION_USER_KEY
 )
-
-if not authenticated or not user_id:
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required.",
-        headers={
-            "WWW-Authenticate": "Session",
-        },
-    )
 
 try:
-    user_id_int = int(user_id)
-except (TypeError, ValueError):
-    request.session.clear()
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid authentication session.",
-        headers={
-            "WWW-Authenticate": "Session",
-        },
+    user_id = int(
+        raw_user_id
     )
+except (
+    TypeError,
+    ValueError,
+):
+    destroy_session(
+        request
+    )
+    return None
 
-user = _find_user_by_id(
-    user_id_int,
+user = get_user_by_id(
+    user_id
+)
+
+if not user or not bool(
+    user.get(
+        "is_active",
+        0,
+    )
+):
+    destroy_session(
+        request
+    )
+    return None
+
+return user
+```
+
+# ============================================================================
+
+# FASTAPI AUTH DEPENDENCY
+
+# ============================================================================
+
+def require_auth(
+request: Request,
+) -> dict[str, Any]:
+"""
+Require an authenticated session.
+"""
+
+```
+user = get_current_user(
+    request
 )
 
 if user is None:
-    request.session.clear()
-
     raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="User no longer exists.",
-        headers={
-            "WWW-Authenticate": "Session",
-        },
-    )
-
-if not bool(user["is_active"]):
-    request.session.clear()
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="User account is inactive.",
-        headers={
-            "WWW-Authenticate": "Session",
-        },
-    )
-
-return user
-```
-
-def get_optional_current_user(
-request: Request,
-) -> dict[str, Any] | None:
-"""
-Return the authenticated user if a valid session exists.
-
-```
-Unlike get_current_user(), this helper does not raise for anonymous
-visitors.
-"""
-
-try:
-    return get_current_user(request)
-except HTTPException:
-    return None
-```
-
-def require_auth(
-user: dict[str, Any] = Depends(get_current_user),
-) -> dict[str, Any]:
-"""
-FastAPI dependency requiring authentication.
-"""
-
-```
-return user
-```
-
-def require_admin(
-user: dict[str, Any] = Depends(get_current_user),
-) -> dict[str, Any]:
-"""
-FastAPI dependency requiring an administrator account.
-"""
-
-```
-if not bool(user.get("is_admin")):
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Administrator privileges required.",
+        status_code=401,
+        detail="Authentication required.",
     )
 
 return user
@@ -554,7 +720,7 @@ return user
 
 # ============================================================================
 
-# CSRF PROTECTION
+# CSRF
 
 # ============================================================================
 
@@ -562,110 +728,161 @@ def get_or_create_csrf_token(
 request: Request,
 ) -> str:
 """
-Return the CSRF token associated with the current session.
-
-```
-The token is random and stored inside the signed session. It is intended
-for state-changing browser requests.
+Return the current CSRF token or create one for this session.
 """
 
+```
 token = request.session.get(
-    "csrf_token",
+    SESSION_CSRF_KEY
 )
 
-if isinstance(token, str) and len(token) >= 32:
+if (
+    isinstance(token, str)
+    and len(token) >= 32
+):
     return token
 
-token = secrets.token_urlsafe(32)
+token = secrets.token_urlsafe(
+    CSRF_TOKEN_BYTES
+)
 
-request.session["csrf_token"] = token
+request.session[
+    SESSION_CSRF_KEY
+] = token
 
 return token
 ```
 
 def validate_csrf_token(
 request: Request,
-supplied_token: str | None,
+submitted_token: str | None,
 ) -> None:
 """
-Validate a CSRF token.
+Validate a submitted CSRF token.
 
 ```
-Raises HTTP 403 if the token is absent or invalid.
+Comparison is performed with hmac.compare_digest().
 """
 
-expected_token = request.session.get(
-    "csrf_token",
+expected = request.session.get(
+    SESSION_CSRF_KEY
 )
 
-if not isinstance(expected_token, str):
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="CSRF validation failed.",
-    )
-
-if not supplied_token:
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="CSRF validation failed.",
-    )
-
-if not _constant_time_equal(
-    expected_token,
-    supplied_token,
+if not isinstance(
+    expected,
+    str,
 ):
     raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="CSRF validation failed.",
+        status_code=403,
+        detail="Invalid CSRF token.",
+    )
+
+if not isinstance(
+    submitted_token,
+    str,
+):
+    raise HTTPException(
+        status_code=403,
+        detail="Invalid CSRF token.",
+    )
+
+# Hashing both values also makes the comparison operate on fixed-size
+# values, avoiding accidental type/length differences.
+expected_digest = hashlib.sha256(
+    expected.encode(
+        "utf-8"
+    )
+).digest()
+
+submitted_digest = hashlib.sha256(
+    submitted_token.encode(
+        "utf-8"
+    )
+).digest()
+
+if not hmac.compare_digest(
+    expected_digest,
+    submitted_digest,
+):
+    raise HTTPException(
+        status_code=403,
+        detail="Invalid CSRF token.",
     )
 ```
 
 # ============================================================================
 
-# PUBLIC USER REPRESENTATION
+# LEGACY COMPATIBILITY HELPERS
 
 # ============================================================================
 
-def public_user(
-user: dict[str, Any],
-) -> dict[str, Any]:
+def get_current_username(
+request: Request,
+) -> str | None:
 """
-Return the safe subset of user information suitable for an API response.
+Backwards-compatible helper.
 
 ```
-Password hashes and other internal database fields are never exposed.
+New code should use get_current_user().
 """
 
-return {
-    "id": int(user["id"]),
-    "email": str(user["email"]),
-    "is_admin": bool(user["is_admin"]),
-    "is_active": bool(user["is_active"]),
-}
+user = get_current_user(
+    request
+)
+
+if not user:
+    return None
+
+return str(
+    user["email"]
+)
+```
+
+def verify_session(
+request: Request,
+) -> bool:
+"""
+Backwards-compatible boolean session check.
+"""
+
+```
+return (
+    get_current_user(
+        request
+    )
+    is not None
+)
 ```
 
 # ============================================================================
 
-# INITIALIZATION
+# EXPORTS
 
 # ============================================================================
-
-_ensure_users_table()
 
 **all** = [
-"ADMIN_EMAIL",
-"ADMIN_PASSWORD",
+"SESSION_AUTHENTICATED_KEY",
+"SESSION_CSRF_KEY",
+"SESSION_EMAIL_KEY",
+"SESSION_USER_KEY",
 "authenticate_user",
-"create_default_admin",
+"basic_security",
 "create_session",
+"create_user",
 "destroy_session",
 "get_current_user",
-"get_optional_current_user",
+"get_current_user_info",
+"get_current_username",
 "get_or_create_csrf_token",
+"get_user_by_email",
+"get_user_by_id",
 "hash_password",
+"is_authenticated",
+"password_needs_rehash",
 "public_user",
-"require_admin",
 "require_auth",
+"update_password",
 "validate_csrf_token",
 "verify_password",
+"verify_session",
 ]
