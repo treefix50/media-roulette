@@ -17,13 +17,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import (
-APIRouter,
-Depends,
-Form,
-HTTPException,
-Request,
-)
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -36,16 +30,13 @@ enforce_scan_rate_limit,
 from app.security import (
 authenticate_user,
 create_session,
-get_current_user,
 get_or_create_csrf_token,
 public_user,
 require_auth,
 validate_csrf_token,
 )
 
-logger = logging.getLogger(
-"media_roulette.api"
-)
+logger = logging.getLogger("media_roulette.api")
 
 router = APIRouter()
 
@@ -83,59 +74,33 @@ item: dict[str, Any] | None,
 Convert an internal media record into a safe API representation.
 
 ```
-Internal filesystem paths are never returned.
+Internal filesystem paths are never returned to API clients.
 """
 
 if not item:
     return None
 
-data = dict(
-    item
-)
+data = dict(item)
 
 # ------------------------------------------------------------------------
 # Never expose filesystem paths.
 # ------------------------------------------------------------------------
 
-data.pop(
-    "path",
-    None,
-)
-
-data.pop(
-    "nfo_path",
-    None,
-)
-
-data.pop(
-    "poster_path",
-    None,
-)
+data.pop("path", None)
+data.pop("nfo_path", None)
+data.pop("poster_path", None)
 
 # ------------------------------------------------------------------------
 # Local poster.
 # ------------------------------------------------------------------------
 
-media_id = data.get(
-    "id"
-)
+media_id = data.get("id")
+local_poster = item.get("poster_path")
 
-local_poster = item.get(
-    "poster_path"
-)
-
-if (
-    media_id is not None
-    and local_poster
-):
+if media_id is not None and local_poster:
     try:
-        data["poster_url"] = (
-            f"/api/poster/{int(media_id)}"
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
+        data["poster_url"] = f"/api/poster/{int(media_id)}"
+    except (TypeError, ValueError):
         pass
 
 # ------------------------------------------------------------------------
@@ -143,16 +108,10 @@ if (
 # ------------------------------------------------------------------------
 
 if "poster_url" not in data:
-
-    poster = item.get(
-        "poster"
-    )
+    poster = item.get("poster")
 
     if poster:
-
-        poster = str(
-            poster
-        ).strip()
+        poster = str(poster).strip()
 
         if poster.lower().startswith(
             (
@@ -162,11 +121,9 @@ if "poster_url" not in data:
         ):
             data["poster_url"] = poster
 
-# The raw poster field may contain a local filename.
-data.pop(
-    "poster",
-    None,
-)
+# The raw poster field may contain a local filename or URL.
+# It must not be exposed directly.
+data.pop("poster", None)
 
 return data
 ```
@@ -206,13 +163,13 @@ provider: str | None,
 Normalize provider input.
 
 ```
-Library performs the authoritative provider validation.
+Provider names are compared case-insensitively by the API.
 """
 
 if provider is None:
     return None
 
-normalized = provider.strip().casefold()
+normalized = provider.strip()
 
 if not normalized:
     return None
@@ -222,6 +179,13 @@ if len(normalized) > 64:
         status_code=400,
         detail="Provider value is too long.",
     )
+
+if normalized.casefold() in {
+    "alle",
+    "all",
+    "*",
+}:
+    return "alle"
 
 return normalized
 ```
@@ -240,7 +204,6 @@ if not exclude:
 titles: list[str] = []
 
 for raw in exclude.splitlines():
-
     title = raw.strip()
 
     if not title:
@@ -250,11 +213,9 @@ for raw in exclude.splitlines():
         continue
 
     if title not in titles:
-        titles.append(
-            title
-        )
+        titles.append(title)
 
-    # Prevent a huge request body from becoming a large SQL statement.
+    # Prevent a huge request parameter from creating a large SQL query.
     if len(titles) >= 100:
         break
 
@@ -275,9 +236,7 @@ async def login(
 request: Request,
 username: str = Form(...),
 password: str = Form(...),
-csrf_token: str | None = Form(
-default=None
-),
+csrf_token: str | None = Form(default=None),
 _rate_limit: None = Depends(
 enforce_login_rate_limit
 ),
@@ -286,17 +245,19 @@ enforce_login_rate_limit
 Authenticate the user and establish a signed browser session.
 
 ```
-The endpoint keeps the historic /api/token URL so existing frontend code
-can be migrated without changing the public API path.
+The historic /api/token URL is retained for frontend compatibility.
 
-OAuth2 bearer tokens are intentionally not returned.
+No OAuth2 bearer token is returned.
 """
 
-# Login CSRF is validated only when a CSRF token was supplied.
+# ------------------------------------------------------------------------
+# Login CSRF
 #
-# A completely unauthenticated browser does not necessarily have a
-# session-bound token yet. The login rate limiter provides the primary
-# brute-force protection for this endpoint.
+# A first-time unauthenticated browser may not yet have a session-bound
+# CSRF token. If the frontend supplies one, validate it. Otherwise the
+# login endpoint remains usable for initial authentication.
+# ------------------------------------------------------------------------
+
 if csrf_token is not None:
     validate_csrf_token(
         request,
@@ -350,9 +311,8 @@ logger.info(
 
 return {
     "success": True,
-    "user": public_user(
-        user
-    ),
+    "user": public_user(user),
+    "csrf_token": get_or_create_csrf_token(request),
 }
 ```
 
@@ -370,18 +330,45 @@ enforce_api_rate_limit
 ),
 ):
 """
-Return the currently authenticated user's public information.
+Return the currently authenticated user's public information and
+session-bound CSRF token.
 """
 
 ```
 return {
     "authenticated": True,
-    "user": public_user(
-        current_user
-    ),
-    "csrf_token": get_or_create_csrf_token(
-        request
-    ),
+    "user": public_user(current_user),
+    "csrf_token": get_or_create_csrf_token(request),
+}
+```
+
+@router.post(
+"/api/logout",
+tags=["Auth"],
+)
+async def logout(
+request: Request,
+_current_user: dict[str, Any] = Depends(
+require_auth
+),
+_rate_limit: None = Depends(
+enforce_api_rate_limit
+),
+):
+"""
+Destroy the current authenticated session.
+
+```
+This endpoint requires a valid authenticated session.
+"""
+
+# Import locally to keep the security dependency surface explicit.
+from app.security import destroy_session
+
+destroy_session(request)
+
+return {
+    "success": True,
 }
 ```
 
@@ -397,11 +384,11 @@ tags=["System"],
 )
 async def test():
 """
-Lightweight application API test.
+Lightweight public application health endpoint.
 
 ```
-This endpoint is deliberately public so a reverse proxy can use it for
-connectivity checks without needing an application session.
+This endpoint intentionally does not require authentication so Zoraxy
+or Docker can use it as a connectivity/health check.
 """
 
 return {
@@ -432,11 +419,11 @@ enforce_scan_rate_limit
 Trigger a complete library scan.
 
 ```
-The synchronous scanner is executed in a worker thread.
+The synchronous filesystem/database scanner runs in a worker thread so
+the FastAPI event loop remains responsive.
 """
 
 try:
-
     count = await run_in_threadpool(
         library.scan
     )
@@ -459,8 +446,25 @@ try:
         "stats": stats,
     }
 
-except Exception as exc:
+except RuntimeError as exc:
+    # Library.scan() uses a process-local lock and reports a concurrent
+    # scan through RuntimeError.
+    if "already running" in str(exc).casefold():
+        raise HTTPException(
+            status_code=409,
+            detail="A library scan is already running.",
+        ) from exc
 
+    logger.exception(
+        "Manual library scan failed"
+    )
+
+    raise HTTPException(
+        status_code=500,
+        detail="Library could not be updated.",
+    ) from exc
+
+except Exception as exc:
     logger.exception(
         "Manual library scan failed"
     )
@@ -498,13 +502,11 @@ private media library.
 """
 
 try:
-
     return await run_in_threadpool(
         library.stats
     )
 
 except Exception as exc:
-
     logger.exception(
         "Loading library statistics failed"
     )
@@ -512,6 +514,50 @@ except Exception as exc:
     raise HTTPException(
         status_code=500,
         detail="Statistics could not be loaded.",
+    ) from exc
+```
+
+# ============================================================================
+
+# PROVIDERS
+
+# ============================================================================
+
+@router.get(
+"/api/providers",
+tags=["Library"],
+)
+async def providers(
+_current_user: dict[str, Any] = Depends(
+require_auth
+),
+_rate_limit: None = Depends(
+enforce_api_rate_limit
+),
+):
+"""
+Return all discovered media providers.
+"""
+
+```
+try:
+    values = await run_in_threadpool(
+        library.providers
+    )
+
+    return {
+        "success": True,
+        "providers": values,
+    }
+
+except Exception as exc:
+    logger.exception(
+        "Loading media providers failed"
+    )
+
+    raise HTTPException(
+        status_code=500,
+        detail="Providers could not be loaded.",
     ) from exc
 ```
 
@@ -548,7 +594,7 @@ Supported filters:
 
     provider:
         provider name
-        "alle"
+        alle / all / *
 
     exclude:
         newline-separated titles
@@ -567,7 +613,6 @@ exclude_titles = _parse_exclude(
 )
 
 try:
-
     item = await run_in_threadpool(
         library.random_item,
         normalized_kind,
@@ -575,12 +620,9 @@ try:
         exclude_titles,
     )
 
-    # If all matching titles were excluded, fall back to the full
-    # matching set.
-    if (
-        item is None
-        and exclude_titles
-    ):
+    # If every matching title was excluded, fall back to the full
+    # matching set rather than returning a false "no media" result.
+    if item is None and exclude_titles:
         item = await run_in_threadpool(
             library.random_item,
             normalized_kind,
@@ -612,20 +654,10 @@ try:
 
     logger.info(
         "Recommendation: %s - %s (%s) @ %s by %s",
-        public_data.get(
-            "kind"
-        ),
-        public_data.get(
-            "title"
-        ),
-        public_data.get(
-            "year",
-            "?",
-        ),
-        public_data.get(
-            "provider",
-            "?",
-        ),
+        public_data.get("kind"),
+        public_data.get("title"),
+        public_data.get("year", "?"),
+        public_data.get("provider", "?"),
         current_user.get(
             "email",
             "unknown",
@@ -641,7 +673,6 @@ except HTTPException:
     raise
 
 except Exception as exc:
-
     logger.exception(
         "Random recommendation failed"
     )
@@ -675,7 +706,8 @@ enforce_api_rate_limit
 Serve a scanner-approved local poster.
 
 ```
-Library.poster_for_id() performs the authoritative path validation.
+Library.poster_for_id() performs the authoritative filesystem path
+validation before this endpoint serves the file.
 """
 
 if media_id <= 0:
@@ -685,7 +717,6 @@ if media_id <= 0:
     )
 
 try:
-
     poster_path = await run_in_threadpool(
         library.poster_for_id,
         media_id,
@@ -725,15 +756,11 @@ try:
         )
 
     return FileResponse(
-        path=str(
-            path
-        ),
+        path=str(path),
         media_type=media_type,
         filename=path.name,
         headers={
-            "Cache-Control": (
-                "private, max-age=86400"
-            ),
+            "Cache-Control": "private, max-age=86400",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": (
                 f'inline; filename="{path.name}"'
@@ -745,7 +772,6 @@ except HTTPException:
     raise
 
 except Exception as exc:
-
     logger.exception(
         "Poster loading failed for media %s",
         media_id,
