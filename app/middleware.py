@@ -1,35 +1,26 @@
 """
 Media Roulette - HTTP security middleware.
 
-Media Roulette is intended to run behind a reverse proxy such as Zoraxy.
+The application is designed to run behind a reverse proxy such as Zoraxy.
 
-The reverse proxy is responsible for:
+Responsibilities:
 
-* Public DNS
-* TLS certificates
-* HTTPS termination
-* Public HTTP -> HTTPS redirection
+* security response headers
+* Content Security Policy
+* HSTS in HTTPS production mode
+* removal of application-level server identification
 
-This application is responsible for:
-
-* HTTP security headers
-* browser-side security policy
-* preventing MIME sniffing
-* clickjacking protection
-* referrer policy
-* cache control for authenticated application pages
-
-No Flask-specific configuration is used here.
+TLS termination itself is intentionally left to Zoraxy.
 """
 
 from **future** import annotations
 
 import os
-from collections.abc import Awaitable, Callable
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp
+from starlette.requests import Request
+from starlette.responses import Response
 
 # ============================================================================
 
@@ -42,164 +33,212 @@ ENVIRONMENT = os.getenv(
 "production",
 ).strip().lower()
 
-# When Media Roulette is deployed behind Zoraxy, the browser-facing scheme is
-
-# normally HTTPS even though the connection from Zoraxy to the container may
-
-# be plain HTTP.
-
 PUBLIC_SCHEME = os.getenv(
 "PUBLIC_SCHEME",
 "https" if ENVIRONMENT == "production" else "http",
 ).strip().lower()
 
-# Optional public hostname, used only for documentation/diagnostics and future
+# HSTS is intentionally disabled unless the application knows it is served
 
-# policy extensions. It is deliberately not inserted into response headers.
+# through HTTPS.
 
-PUBLIC_HOST = os.getenv(
-"PUBLIC_HOST",
-"",
-).strip()
+HSTS_MAX_AGE = 31536000
 
 # ============================================================================
 
-# SECURITY HEADERS
+# CONTENT SECURITY POLICY
 
 # ============================================================================
 
-def _content_security_policy() -> str:
-"""
-Build the Content-Security-Policy.
+# The existing Media Roulette frontend uses application-local resources and
 
-```
-The current application keeps its JavaScript and CSS local to Media
-Roulette. Inline scripts/styles are intentionally not allowed by the
-policy.
+# may currently contain inline JavaScript/CSS.
 
-Remote poster images are not allowed by default. Posters should therefore
-be served through the application's local poster endpoint.
+#
 
-If a future implementation intentionally needs remote images, the CSP
-should be changed explicitly rather than silently permitting all origins.
-"""
+# 'unsafe-inline' is therefore retained for compatibility at this stage.
 
-return "; ".join(
-    [
-        "default-src 'self'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-        "object-src 'none'",
-        "script-src 'self'",
-        "style-src 'self'",
-        "img-src 'self' data:",
-        "font-src 'self'",
-        "connect-src 'self'",
-        "media-src 'self'",
-        "worker-src 'self'",
-    ]
-)
-```
+# Once the frontend files have been audited, inline code can be migrated to
 
-def security_headers(
-response: Response,
-) -> Response:
-"""
-Add security-related response headers.
+# external files and these directives can be tightened.
 
-```
-Existing values are replaced intentionally so that every response gets a
-consistent policy.
-"""
-
-response.headers["X-Content-Type-Options"] = "nosniff"
-
-response.headers["X-Frame-Options"] = "DENY"
-
-response.headers["Referrer-Policy"] = (
-    "strict-origin-when-cross-origin"
+CONTENT_SECURITY_POLICY = (
+"default-src 'self'; "
+"base-uri 'self'; "
+"form-action 'self'; "
+"frame-ancestors 'self'; "
+"object-src 'none'; "
+"script-src 'self' 'unsafe-inline'; "
+"style-src 'self' 'unsafe-inline'; "
+"img-src 'self' data: https:; "
+"font-src 'self' data:; "
+"connect-src 'self'; "
+"media-src 'self'; "
 )
 
-response.headers["Permissions-Policy"] = (
-    "accelerometer=(), "
-    "autoplay=(), "
-    "camera=(), "
-    "display-capture=(), "
-    "fullscreen=(), "
-    "geolocation=(), "
-    "gyroscope=(), "
-    "magnetometer=(), "
-    "microphone=(), "
-    "midi=(), "
-    "payment=(), "
-    "usb=()"
-)
+# ============================================================================
 
-response.headers["Content-Security-Policy"] = (
-    _content_security_policy()
-)
+# MIDDLEWARE
 
-# Prevent authenticated application data from being cached by shared
-# intermediaries.
-response.headers["Cache-Control"] = (
-    "no-store"
-)
+# ============================================================================
 
-# HSTS belongs on the application only when the public endpoint is HTTPS.
-# Since Zoraxy terminates TLS, this header is still appropriate for browser
-# clients once the production deployment is HTTPS-only.
-if (
-    ENVIRONMENT == "production"
-    and PUBLIC_SCHEME == "https"
+class SecurityHeadersMiddleware(
+BaseHTTPMiddleware
 ):
-    response.headers["Strict-Transport-Security"] = (
-        "max-age=31536000; includeSubDomains"
-    )
-
-# X-XSS-Protection is intentionally not emitted. It is obsolete in modern
-# browsers and can create undesirable behavior in older clients.
-
-return response
-```
-
-# ============================================================================
-
-# FASTAPI MIDDLEWARE
-
-# ============================================================================
-
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 """
 Add security headers to every HTTP response.
-"""
 
 ```
+This middleware does not terminate TLS and does not attempt to manipulate
+forwarded protocol headers. Zoraxy remains responsible for public HTTPS.
+"""
+
 async def dispatch(
     self,
     request: Request,
-    call_next: Callable[[Request], Awaitable[Response]],
+    call_next,
 ) -> Response:
-    response = await call_next(request)
 
-    return security_headers(
-        response,
+    response = await call_next(
+        request
     )
+
+    # --------------------------------------------------------------------
+    # Clickjacking
+    # --------------------------------------------------------------------
+
+    response.headers[
+        "X-Frame-Options"
+    ] = "SAMEORIGIN"
+
+    # --------------------------------------------------------------------
+    # MIME sniffing
+    # --------------------------------------------------------------------
+
+    response.headers[
+        "X-Content-Type-Options"
+    ] = "nosniff"
+
+    # --------------------------------------------------------------------
+    # Referrer handling
+    # --------------------------------------------------------------------
+
+    response.headers[
+        "Referrer-Policy"
+    ] = "strict-origin-when-cross-origin"
+
+    # --------------------------------------------------------------------
+    # Browser permissions
+    # --------------------------------------------------------------------
+
+    response.headers[
+        "Permissions-Policy"
+    ] = (
+        "camera=(), "
+        "microphone=(), "
+        "geolocation=(), "
+        "payment=(), "
+        "usb=()"
+    )
+
+    # --------------------------------------------------------------------
+    # Content Security Policy
+    # --------------------------------------------------------------------
+
+    response.headers[
+        "Content-Security-Policy"
+    ] = CONTENT_SECURITY_POLICY
+
+    # --------------------------------------------------------------------
+    # Cross-origin isolation policy
+    # --------------------------------------------------------------------
+
+    response.headers[
+        "Cross-Origin-Opener-Policy"
+    ] = "same-origin"
+
+    response.headers[
+        "Cross-Origin-Resource-Policy"
+    ] = "same-origin"
+
+    # --------------------------------------------------------------------
+    # Browser cache behavior for authenticated HTML/API responses
+    # --------------------------------------------------------------------
+
+    path = request.url.path
+
+    if (
+        path == "/"
+        or path == "/login"
+        or path.startswith("/api/")
+    ):
+        # Do not allow a shared intermediary cache to retain authenticated
+        # application responses.
+        response.headers[
+            "Cache-Control"
+        ] = (
+            "no-store, "
+            "max-age=0"
+        )
+
+        response.headers[
+            "Pragma"
+        ] = "no-cache"
+
+    # --------------------------------------------------------------------
+    # HSTS
+    # --------------------------------------------------------------------
+
+    if (
+        ENVIRONMENT == "production"
+        and PUBLIC_SCHEME == "https"
+    ):
+        response.headers[
+            "Strict-Transport-Security"
+        ] = (
+            f"max-age={HSTS_MAX_AGE}; "
+            "includeSubDomains"
+        )
+
+    # --------------------------------------------------------------------
+    # Remove headers that may reveal implementation details.
+    #
+    # Note:
+    # Uvicorn may add its own Server header at the ASGI server layer.
+    # Removing it here is therefore best-effort only.
+    # --------------------------------------------------------------------
+
+    response.headers.pop(
+        "X-Powered-By",
+        None,
+    )
+
+    response.headers.pop(
+        "Server",
+        None,
+    )
+
+    return response
 ```
+
+# ============================================================================
+
+# FASTAPI HELPER
+
+# ============================================================================
 
 def add_security_headers_fastapi(
 app: FastAPI,
 ) -> FastAPI:
 """
-Register the security middleware on a FastAPI application.
+Install SecurityHeadersMiddleware and return the same application.
 
 ```
-This helper keeps main.py concise and provides a single place for
-application-wide security-header configuration.
+Returning the app keeps compatibility with existing initialization code.
 """
 
 app.add_middleware(
-    SecurityHeadersMiddleware,
+    SecurityHeadersMiddleware
 )
 
 return app
@@ -207,21 +246,13 @@ return app
 
 # ============================================================================
 
-# COMPATIBILITY ALIAS
+# EXPORTS
 
 # ============================================================================
 
-# Kept as a small compatibility layer for code that may still import the
-
-# previous middleware helper name.
-
-SecurityMiddleware = SecurityHeadersMiddleware
-
 **all** = [
-"PUBLIC_HOST",
-"PUBLIC_SCHEME",
+"CONTENT_SECURITY_POLICY",
+"HSTS_MAX_AGE",
 "SecurityHeadersMiddleware",
-"SecurityMiddleware",
 "add_security_headers_fastapi",
-"security_headers",
 ]
